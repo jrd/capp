@@ -1,0 +1,23 @@
+#!/bin/bash
+set -e
+app="$1"
+target_env="$2"
+prune_all="$3"
+[ -n "$app" ]
+echo "$app" | grep -q '[-_a-zA-Z0-9]'
+[ -n "$target_env" ]
+echo "$target_env" | grep -q -E '(dev|integ|recette|prod)'
+echo "undeploy $app/$target_env"
+. /etc/compose-dirs.conf
+sudo systemctl stop compose@$(systemd-escape --suffix service "${app}/${target_env}")
+grep -q "^${app}/${target_env}:" $deps_file && sed -r -i "/^${app}\/${target_env}:/d" $deps_file
+sudo compose-dirs update
+cd "$compose_dir"
+if [ -d $app/$target_env ]; then
+  cd $app/$target_env
+  [ "$prune_all" = "all" ] && ARGS='-v --rmi all' || ARGS='--rmi local'
+  docker-compose down $ARGS
+  cd "$compose_dir"
+  rm -rf $app/$target_env
+  rmdir $app 2>/dev/null || true
+fi
