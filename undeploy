@@ -10,9 +10,9 @@ echo "$target_env" | grep -q -E '(dev|integ|recette|prod)'
 echo "undeploy $app/$target_env"
 . /etc/compose-dirs.conf
 sudo systemctl stop compose@$(systemd-escape --suffix service "${app}/${target_env}")
+cd "$compose_dir"
 grep -q "^${app}/${target_env}:" $deps_file && sed -r -i "/^${app}\/${target_env}:/d" $deps_file
 sudo compose-dirs update
-cd "$compose_dir"
 if [ -d $app/$target_env ]; then
   cd $app/$target_env
   [ "$prune_all" = "all" ] && ARGS='-v --rmi all' || ARGS='--rmi local'
