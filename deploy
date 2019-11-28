@@ -1,10 +1,27 @@
 #!/bin/bash
 set -e
 rlz="$1"
+shift
 [ -f "${rlz}" ]
 [ -f "${rlz}.sha256" ]
+doclean=0
+dostart=1
+while [ -n "$1" ]; do
+    case "$1" in
+        clean)
+            doclean=1
+            ;;
+        nostart)
+            dostart=0
+            ;;
+        *)
+            echo "Unrecognized argument $1" >&2
+            exit 1
+            ;;
+    esac
+done
 echo "deploy $rlz"
-sha256sum -c "${rlz}.sha256"
+(cd "$(dirname "$rlz")" && sha256sum -c "${rlz}.sha256")
 tmp=$(mktemp -d)
 trap "rm -rf $tmp 2>/dev/null" EXIT INT TERM
 tar -xvf "$rlz" -C $tmp
@@ -22,11 +39,15 @@ if [ $(ls $tmp/images/*.tar.gz 2>/dev/null|wc -l) -gt 0 ]; then
   done
 fi
 cd "$compose_dir"
+if [ $doclean -eq 1 ] && [ -d $app/$target_env ]; then
+    (cd $app/$target_env && docker-compose down -v)
+fi
 mkdir -p $app/$target_env
-mv $tmp/context/docker-compose.yml $app/$target_env/orig.yml
+mv $tmp/context/docker-compose.yml $app/$target_env/.orig.yml
 cp $tmp/context/* $app/$target_env/ 2>/dev/null || true
 cd $app/$target_env/
-cat > proxy.yml <<EOF
+echo "COMPOSE_PROJECT_NAME=${app}-${target_env}" > .env
+cat > .proxy.yml <<EOF
 version: '2.4'
 networks:
   "proxy":
@@ -36,13 +57,13 @@ services:
 EOF
 domain=$(sed -r -n '/DEFAULT_HOST/s/.*=(.*)"/\1/p' ${compose_dir}/proxy/docker-compose.yml)
 [ "$target_env" = "prod" ] && suffix=.${domain} || suffix=-${target_env}.${domain}
-for svc in $(docker-compose -f orig.yml config --services); do
+for svc in $(docker-compose -f .orig.yml config --services); do
   vhost_var=${svc}_base_vhost
   vhost=${!vhost_var}
   port_var=${svc}_vhost_port
   port=${!port_var:-80}
   if [ -n "$vhost" ]; then
-    cat >> proxy.yml <<EOF
+    cat >> .proxy.yml <<EOF
   $svc:
     environment:
       - "VIRTUAL_HOST=${vhost}${suffix}"
@@ -53,9 +74,13 @@ for svc in $(docker-compose -f orig.yml config --services); do
 EOF
   fi
 done
-docker-compose -f orig.yml -f proxy.yml config > docker-compose.yml
+docker-compose -f .orig.yml -f .proxy.yml config > docker-compose.yml
 cd "$compose_dir"
 grep -q "^${app}/${target_env}:" $deps_file && sed -r -i "/^${app}\/${target_env}:/d" $deps_file
 echo "${app}/${target_env}:proxy" >> $deps_file
 sudo compose-dirs update
-sudo systemctl restart compose@$(systemd-escape --suffix service "${app}/${target_env}")
+if [ $nostart -eq 0 ]; then
+  sudo systemctl restart compose@$(systemd-escape --suffix service "${app}/${target_env}")
+elif systemctl is-active compose@$(systemd-escape --suffix service "${app}/${target_env}"); then
+  sudo systemctl stop compose@$(systemd-escape --suffix service "${app}/${target_env}")
+fi
