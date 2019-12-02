@@ -77,6 +77,7 @@ EOF
   fi
 done
 docker-compose -f .orig.yml -f .proxy.yml config > docker-compose.yml
+sed -i "s|$PWD|.|g" docker-compose.yml
 cd "$compose_dir"
 grep -q "^${app}/${target_env}:" $deps_file && sed -r -i "/^${app}\/${target_env}:/d" $deps_file
 echo "${app}/${target_env}:proxy" >> $deps_file
