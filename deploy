@@ -19,6 +19,7 @@ while [ -n "$1" ]; do
             exit 1
             ;;
     esac
+    shift
 done
 echo "deploy $rlz"
 (cd "$(dirname "$rlz")" && sha256sum -c "${rlz}.sha256")
@@ -37,6 +38,7 @@ if [ $(ls $tmp/images/*.tar.gz 2>/dev/null|wc -l) -gt 0 ]; then
     zcat $image | docker image load
     rm $image
   done
+  docker image prune -f || true
 fi
 cd "$compose_dir"
 if [ $doclean -eq 1 ] && [ -d $app/$target_env ]; then
@@ -79,8 +81,8 @@ cd "$compose_dir"
 grep -q "^${app}/${target_env}:" $deps_file && sed -r -i "/^${app}\/${target_env}:/d" $deps_file
 echo "${app}/${target_env}:proxy" >> $deps_file
 sudo compose-dirs update
-if [ $nostart -eq 0 ]; then
+if [ "$dostart" = "1" ]; then
   sudo systemctl restart compose@$(systemd-escape --suffix service "${app}/${target_env}")
-elif systemctl is-active compose@$(systemd-escape --suffix service "${app}/${target_env}"); then
+elif systemctl is-active compose@$(systemd-escape --suffix service "${app}/${target_env}") > /dev/null; then
   sudo systemctl stop compose@$(systemd-escape --suffix service "${app}/${target_env}")
 fi
