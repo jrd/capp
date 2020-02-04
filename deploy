@@ -46,7 +46,7 @@ if [ $doclean -eq 1 ] && [ -d $app/$target_env ]; then
 fi
 mkdir -p $app/$target_env
 mv $tmp/context/docker-compose.yml $app/$target_env/.orig.yml
-cp $tmp/context/* $app/$target_env/ 2>/dev/null || true
+cp -rv $tmp/context/* $app/$target_env/ 2>/dev/null || true
 cd $app/$target_env/
 echo "COMPOSE_PROJECT_NAME=${app}-${target_env}" > .env
 cat > .proxy.yml <<EOF
