@@ -1,0 +1,16 @@
+version: "2.4"
+services:
+    scp:
+        image: jrdasm/sshd
+        environment:
+            - "SCP_MODE=true"
+            - "MOTD=Docker Compose Archives"
+            - "SSH_USERS=dca:1000:1000"
+        volumes:
+            - "keys:/etc/ssh/keys:rw"
+            - "./users-keys:/etc/authorized_keys/dca:ro"
+            - "/home/deploy/dca:/home/dca:rw"
+        ports:
+            - "0.0.0.0:122:22"
+volumes:
+    keys:

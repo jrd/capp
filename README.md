@@ -1,36 +1,60 @@
+Prerequisite
+------------
+
+The following binaries should be available:
+- useradd
+- usermod
+- base64
+- curl
+- docker-compose
+- sudo
+- tar
+- unxz
+
+The scripts rely on a system running **systemd**.
+
 Installation
 ------------
 
-Install [compose-dirs](https://github.com/jrd/compose-systemd)
+- Create the installer: `make`
+- Copy the `capp-installer` file to your host target.
+- Execute it with **root privilege** and by specifying the **default hostname** and **email address** to use for the `proxy` (email is used for *let's encrypt*):  
+`capp-installer example.com user@example.com`
 
-Use the following config:
+Be sure to have your `sshd` service up and running.
 
-    compose_dir=/etc/compose
-    compose_user=compose
-    tmpl_name=compose
-    deps_file=compose.deps
+Configuration
+-------------
 
-Create a `deploy` account without any password (login only allowed with private keys).
+Users allowed to upload *DCA* files should have their public keys in `/etc/compose/dca/users-keys`.
+For more information see the [dca readme](dca/README.md).
 
-Add `compose` user to the `deploy` group (for allowing it to see deployed files).
+Users allowed to act on deployments should have their public keys in `/etc/deploy-authorized-keys`.
+You don't have to do anything after modifying this file for the content to be taken into account.
 
-Adjust `compose` user sudoer file:
+Admin usage
+-----------
 
-    # Allow members of compose group to execute compose-dirs command
-    Cmnd_Alias COMPOSE_DIRS = /usr/local/bin/compose-dirs
-    Cmnd_Alias COMPOSE_SVC = /usr/bin/systemctl start compose@*, /usr/bin/systemctl stop compose@*, /usr/bin/systemctl restart compose@*
-    %compose   ALL= NOPASSWD: COMPOSE_DIRS, COMPOSE_SVC
+All actions should be done under the **`compose`** account.
 
-Install `deploy` and `undeploy` script in `/usr/local/bin`.
+To switch to it, use `su -s /bin/bash --login compose` from `root` account.
+
+Main scripts are `compose-dirs` and `capp`.
 
 Usage
 -----
 
-All actions should be done under the **`compose`** account.
+Two ssh servers are running on the node: one for administration and deployements (port 22), one for transfering *Docker Compose Archives* (port 122).
+
+### Transfering a DCA and its signature
+
+If you have your public key allowed, you could transfer a *dca* file and its signature to *node* by doing something like:
+
+`scp -P 122 my.dca* dca@node:`
 
 ### Deploy
 
-`compose@host $ deploy ~deploy/dca/PATH_TO_DCA_FILE.dca [clean] [nostart]`
+`ssh deploy@node deploy ~deploy/dca/my.dca [clean] [nostart]`
 
 This will verify the file, extract it, install docker images, docker-compose config file, systemd service and start it.  
 If `clean` is provided, any pre-existing volumes will be deleted prior deploy.  
@@ -40,7 +64,7 @@ This will exit with `0` status if deploy was ok, greater number in case of error
 
 ### Undeploy
 
-`compose@host $ undeploy APP TARGET_ENV [all]`
+`ssh deploy@node undeploy my_app integ [all]`
 
 This will stop the docker services, remove the systemd service, delete docker-compose files and images.  
 If `all` is provided, then all related images and volumes will also be deleted.  
@@ -48,33 +72,19 @@ Be careful, volumes may contains data not backuped!
 
 This will exit with `0` status if undeploy was ok, greater number in case of error.
 
-### Start, Restart, Stop
+### Start, Restart, Stop, Status, Logs
 
-Any docker compose application is deployed as a **systemd service**, so it can be monitored with usual tools.
+See `ssh deploy@node help` for an exhaustive list of all actions and options.
 
-For a **myapp** app, deployed on a **prod** environment, here are the actions that can be done:
+### Hacking as admin
 
-    compose@host $ systemctl status compose@myapp-prod
-    compose@host $ sudo systemctl start compose@myapp-prod
-    compose@host $ sudo systemctl restart compose@myapp-prod
-    compose@host $ sudo systemctl stop compose@myapp-prod
+If you can log into *node* and change to the `compose` account or your account is in the `docker` group:
 
+- Go into you app and environment folder, containing `docker-compose.yml` file, for instance `cd myapp/prod` from `compose` home dir.
+- Then use any `docker-compose` command, like `exec` to enter a container.
 
-### Hacking
-
-Go into you app and environment folder, containing `docker-compose.yml` file.  
-For instance `cd myapp/prod`.
-
-Then use any `docker-compose` command, like `exec` to enter a container.
-
-⚠ Keep it mind that the compose app is handled by a systemd service so **don't start or stop** the compose while the service is running or use `systemctl` commands.
-
-### Logging
-
-Access logging by:
-
-- using `docker-compose logs` command.
-- using `journalctl -feu compose@myapp-env` command.
+⚠ Keep it mind that the compose app is handled by a systemd service so **don't start or stop** the compose while the service is running.  
+Better use the `capp start|stop` commands or `sudo systemctl start|stop` commands.
 
 License and authors
 -------------------
