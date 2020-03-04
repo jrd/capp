@@ -133,7 +133,7 @@ networks:
       name: "proxy_network"
 services:
 EOF
-    domain=$(sed -r -n '/DEFAULT_HOST/s/.*=(.*)"/\1/p' ${compose_dir}/proxy/docker-compose.yml)
+    domain=$(sed -r -n '/^DEFAULT_HOST/s/.*=(.*)/\1/p' ${compose_dir}/proxy/.env)
     [ "$target_env" = "prod" ] && suffix=.${domain} || suffix=-${target_env}.${domain}
     for svc in $(docker-compose -f .orig.yml config --services); do
       vhost_var=${svc}_base_vhost
