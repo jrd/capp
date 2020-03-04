@@ -186,7 +186,7 @@ action_undeploy() {
     if [ -d $app/$target_env ]; then
       cd $app/$target_env
       [ ${arguments[prune_all]} -eq 1 ] && ARGS='-v --rmi all' || ARGS='--rmi local'
-      docker-compose down $ARGS
+      docker-compose down $ARGS 2>&1 | grep -v ^Network | grep -v '^Removing network'
       cd "$compose_dir"
       rm -rf $app/$target_env
       rmdir $app 2>/dev/null || true
