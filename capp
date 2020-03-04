@@ -1,0 +1,303 @@
+#!/bin/bash
+set -e
+if [ ! -e /etc/compose-dirs.conf ]; then
+    echo "This script relies on compose-systemd: https://github.com/jrd/compose-systemd" >&2
+    echo "/etc/compose-dirs.conf file should exist" >&2
+    exit 1
+fi
+. /etc/compose-dirs.conf
+if [ "$(id -un)" != "$compose_user" ]; then
+    echo "This script should be run as $compose_user" >&2
+    exit 1
+fi
+
+declare -A arguments
+read_arguments() {
+    # format
+    # name1 name2 name3=value1 name4=value2 -- ARGUMENTS
+    #
+    # name1 and name2 will be mandatory position variables
+    # name3 and name4 are variables that will be set to 1 if value1 and value2
+    # are available in other arguments, else it will be 0
+    declare -a pos_vars
+    declare -A arg_vars
+    while [ -n "$1" ] && [ "$1" != "--" ]; do
+        variable="$1"
+        shift
+        if echo "$variable" | grep -q '='; then
+            value=$(echo $variable|cut -d= -f2-)
+            variable=$(echo $variable|cut -d= -f1)
+            arg_vars["$value"]=$variable
+        else
+            pos_vars+=("$variable")
+        fi
+    done
+    [ "$1" == "--" ] && shift
+    for var_name in ${pos_vars[*]}; do
+        arguments[$var_name]=""
+    done
+    for var_name in ${arg_vars[*]}; do
+        arguments[$var_name]=0
+    done
+    for var_name in ${pos_vars[*]}; do
+        if [ -n "$1" ]; then
+            arguments[$var_name]="$1"
+            shift
+        else
+            echo "$var_name is missing" >&2
+            exit 1
+        fi
+    done
+    while [ -n "$1" ]; do
+        if [ -n "${arg_vars[$1]}" ]; then
+            arguments[${arg_vars["$1"]}]=1
+            shift
+        else
+            echo "Unrecognized argument $1" >&2
+            exit 1
+        fi
+    done
+}
+
+actions="deploy undeploy list start stop restart status logs"
+
+action_help() {
+    me=$(basename "$0")
+    echo "$me help|--help|ACTION" >&$2
+    echo "" >&$2
+    echo "ACTION:" >&$2
+    for action in $actions; do
+        fct="help_$action"
+        echo "" >&$2
+        $fct >&$2
+    done
+    exit $1
+}
+
+check_app_target_env() {
+    [ -n "$1" ]
+    echo "$1" | grep -q '[-_a-zA-Z0-9]'
+    [ -n "$2" ]
+    echo "$2" | grep -q -E '(dev|integ|recette|prod)'
+}
+get_service() {
+    echo $tmpl_name@$(systemd-escape --suffix service "$1${2:+/$2}")
+}
+
+help_deploy() {
+    echo "deploy DCA_ARCHIVE [clean] [nostart]"
+    echo "  Deploy the specified DCA archive, overwriting any existing application with the same name and environment."
+    echo "  clean: first stop and remove all volumes"
+    echo "  nostart: deploy the archive but do not start the application"
+}
+action_deploy() {
+    read_arguments rlz doclean=clean nostart=nostart -- "$@"
+    rlz="${arguments[rlz]}"
+    [ -f "${rlz}" ]
+    [ -f "${rlz}.sha256" ]
+    echo "deploy $rlz"
+    (cd "$(dirname "$rlz")" && sha256sum -c "${rlz}.sha256")
+    tmp=$(mktemp -d)
+    trap "rm -rf $tmp 2>/dev/null" EXIT INT TERM
+    tar -xvf "$rlz" -C $tmp
+    [ -f $tmp/metadata ] && [ -f $tmp/context/docker-compose.yml ] && [ -d $tmp/images ]
+    . $tmp/metadata
+    # unsure no metadata can rewrite any compose-dirs config
+    . /etc/compose-dirs.conf
+    check_app_target_env "$app" "$target_env"
+    [ -n "$app" ]
+    echo "$app" | grep -q '[-_a-zA-Z0-9]'
+    [ -n "$target_env" ]
+    echo "$target_env" | grep -q -E '(dev|integ|recette|prod)'
+    if [ $(ls $tmp/images/*.tar.gz 2>/dev/null|wc -l) -gt 0 ]; then
+      for image in $tmp/images/*.tar.gz; do
+        zcat $image | docker image load
+        rm $image
+      done
+      docker image prune -f || true
+    fi
+    cd "$compose_dir"
+    if [ ${arguments[doclean]} -eq 1 ] && [ -d $app/$target_env ]; then
+        (cd $app/$target_env && docker-compose down -v)
+    fi
+    mkdir -p $app/$target_env
+    mv $tmp/context/docker-compose.yml $app/$target_env/.orig.yml
+    cp -rv $tmp/context/* $app/$target_env/ 2>/dev/null || true
+    cd $app/$target_env/
+    echo "COMPOSE_PROJECT_NAME=${app}-${target_env}" > .env
+    cat > .proxy.yml <<EOF
+version: '2.4'
+networks:
+  "proxy":
+    external:
+      name: "proxy_network"
+services:
+EOF
+    domain=$(sed -r -n '/DEFAULT_HOST/s/.*=(.*)"/\1/p' ${compose_dir}/proxy/docker-compose.yml)
+    [ "$target_env" = "prod" ] && suffix=.${domain} || suffix=-${target_env}.${domain}
+    for svc in $(docker-compose -f .orig.yml config --services); do
+      vhost_var=${svc}_base_vhost
+      vhost=${!vhost_var}
+      port_var=${svc}_vhost_port
+      port=${!port_var:-80}
+      if [ -n "$vhost" ]; then
+        cat >> .proxy.yml <<EOF
+  $svc:
+    environment:
+      - "VIRTUAL_HOST=${vhost}${suffix}"
+      - "LETSENCRYPT_HOST=${vhost}${suffix}"
+      - "VIRTUAL_PORT=${port}"
+    networks:
+      - "proxy"
+EOF
+      fi
+    done
+    docker-compose -f .orig.yml -f .proxy.yml config > docker-compose.yml
+    sed -i "s|$PWD|.|g" docker-compose.yml
+    cd "$compose_dir"
+    grep -q "^${app}/${target_env}:" $deps_file && sed -r -i "/^${app}\/${target_env}:/d" $deps_file
+    echo "${app}/${target_env}:proxy" >> $deps_file
+    sudo compose-dirs update
+    svc=$(get_service $app $target_env)
+    if [ ${arguments[nostart]} -eq 0 ]; then
+      sudo systemctl restart $svc
+    elif systemctl is-active $svc > /dev/null; then
+      sudo systemctl stop $svc
+    fi
+}
+
+help_undeploy() {
+    echo "undeploy APP_NAME ENV [all]"
+    echo "  Undeploy the specified application by first stopping it. No files removed unless all is specified."
+    echo "  ENV could be dev, integ, recette or prod"
+    echo "  all: also remove all volumes and images"
+}
+action_undeploy() {
+    read_arguments app target_env prune_all=all -- "$@"
+    app="${arguments[app]}"
+    target_env="${arguments[target_env]}"
+    check_app_target_env "$app" "$target_env"
+    echo "undeploy $app/$target_env"
+    svc=$(get_service $app $target_env)
+    sudo systemctl stop $svc
+    cd "$compose_dir"
+    grep -q "^${app}/${target_env}:" $deps_file && sed -r -i "/^${app}\/${target_env}:/d" $deps_file
+    sudo compose-dirs update
+    if [ -d $app/$target_env ]; then
+      cd $app/$target_env
+      [ ${arguments[prune_all]} -eq 1 ] && ARGS='-v --rmi all' || ARGS='--rmi local'
+      docker-compose down $ARGS
+      cd "$compose_dir"
+      rm -rf $app/$target_env
+      rmdir $app 2>/dev/null || true
+    fi
+}
+
+help_list() {
+    echo "list [verbose]"
+    echo "  List all applications (name and env) configured on this node."
+    echo "  verbose: show status while listing"
+}
+action_list() {
+    read_arguments dostatus=verbose -- "$@"
+    if [ ${arguments[dostatus]} -eq 1 ]; then
+        for s in $(cut -d: -f1 $compose_dir/$deps_file | grep -E '/.+' | sort); do
+            svc=$(get_service $s)
+            echo $s | sed 's|/| |g'
+            SYSTEMD_COLORS=1 systemctl status --no-pager $svc | sed -rn '/Active:/s/Active: //p'
+        done
+    else
+        cut -d: -f1 $compose_dir/$deps_file | grep -E '/.+' | sort | sed 's|/| |g'
+    fi
+}
+
+help_start() {
+    echo "start APP_NAME ENV"
+    echo "  Start the application specified. The application should already exist on this node."
+    echo "  ENV could be dev, integ, recette or prod"
+}
+action_start() {
+    read_arguments app target_env -- "$@"
+    app="${arguments[app]}"
+    target_env="${arguments[target_env]}"
+    check_app_target_env "$app" "$target_env"
+    svc=$(get_service $app $target_env)
+    sudo systemctl start $svc
+}
+
+help_stop() {
+    echo "stop APP_NAME ENV"
+    echo "  Stop the application specified. The application should already exist on this node."
+    echo "  ENV could be dev, integ, recette or prod"
+}
+action_stop() {
+    read_arguments app target_env -- "$@"
+    app="${arguments[app]}"
+    target_env="${arguments[target_env]}"
+    check_app_target_env "$app" "$target_env"
+    svc=$(get_service $app $target_env)
+    sudo systemctl stop $svc
+}
+
+help_restart() {
+    echo "restart APP_NAME ENV"
+    echo "  Restart the application specified. The application should already exist on this node."
+    echo "  ENV could be dev, integ, recette or prod"
+}
+action_restart() {
+    read_arguments app target_env -- "$@"
+    app="${arguments[app]}"
+    target_env="${arguments[target_env]}"
+    check_app_target_env "$app" "$target_env"
+    svc=$(get_service $app $target_env)
+    sudo systemctl restart $svc
+}
+
+help_status() {
+    echo "status APP_NAME ENV"
+    echo "  Show the systemd status for the application specified. The application should already exist on this node."
+    echo "  ENV could be dev, integ, recette or prod"
+}
+action_status() {
+    read_arguments app target_env -- "$@"
+    app="${arguments[app]}"
+    target_env="${arguments[target_env]}"
+    check_app_target_env "$app" "$target_env"
+    svc=$(get_service $app $target_env)
+    systemctl status --no-pager $svc
+}
+
+help_logs() {
+    echo "logs APP_NAME ENV [nopager]"
+    echo "  Show the global logs (all services) for the application specified. The application should already exist on this node."
+    echo "  ENV could be dev, integ, recette or prod"
+    echo "  nopager: the logs are output directly, without a pager"
+    echo "    else a pager is used, placed you at the end and should be quit with Ctrl-C"
+}
+action_logs() {
+    read_arguments app target_env nopager=nopager -- "$@"
+    app="${arguments[app]}"
+    target_env="${arguments[target_env]}"
+    check_app_target_env "$app" "$target_env"
+    svc=$(get_service $app $target_env)
+    if [ ${arguments[nopager]} -eq 1 ]; then
+        journalctl --no-pager -u $svc
+    else
+        journalctl -feu $svc
+    fi
+}
+
+if [ -n "$1" ]; then
+    action="$1"
+    shift
+    if echo "$action" | grep -q -E 'help|--help'; then
+        action_help 0 1
+    elif echo "$action" | grep -q -E $(echo "$actions"|sed 's/ /|/g'); then
+        fct="action_$action"
+        $fct "$@"
+    else
+        action_help 1 2
+    fi
+else
+    action_help 1 2
+fi

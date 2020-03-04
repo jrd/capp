@@ -1,0 +1,94 @@
+#!/bin/bash
+COMPOSE_SYSTEMD_VER=1.1.0
+set -e
+if [ -z "$2" ]; then
+    echo "$0 default_hostname default_email" >&2
+    exit 1
+fi
+if [ $(id -u) -ne 0 ]; then
+    echo "Root required" >&2
+    exit 1
+fi
+for bin in useradd usermod base64 curl docker-compose sudo tar unxz; do
+    if ! which $bin >/dev/null 2>&1; then
+        echo "$bin required" >&2
+        exit 1
+    fi
+done
+me=$(readlink -f "$0")
+offset=$(($(sed -rn '/#{10}/=' "$me") + 1))
+dh="$1"
+de="$2"
+tmpdir=$(mktemp -d)
+cd $tmpdir
+curl -Ls https://github.com/jrd/compose-systemd/archive/v${COMPOSE_SYSTEMD_VER}.tar.gz | tar xzf -
+tail -n+$offset "$me" | base64 -d | tar xJf -
+cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs.conf /etc/
+cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs /usr/local/bin/
+mkdir -p /var/docker-volumes/nginx-proxy/{vhost.d,certs} /etc/compose /home/deploy/dca
+id -u compose >/dev/null 2>&1 || useradd --home-dir /etc/compose --no-create-home --user-group --shell /usr/sbin/nologin -c "Compose" -l compose
+cp -r proxy dca /etc/compose/
+sed -ri "s/dca:1000:1000/dca:$(id -u compose):$(id -g compose)/" /etc/compose/dca/docker-compose.yml
+cp capp /usr/local/bin
+chown compose: /usr/local/bin/capp
+cat > /etc/compose/proxy/.env <<EOF
+DEFAULT_HOST=$dh
+DEFAULT_EMAIL=$de
+EOF
+if [ -e /etc/compose/compose.deps ]; then
+    for svc in proxy dca; do
+        grep -q "^$svc:" /etc/compose/compose.deps || echo "$svc:" >> /etc/compose/compose.deps
+    done
+else
+    cat > /etc/compose/compose.deps <<EOF
+proxy:
+dca:
+EOF
+fi
+chown -R compose: ~compose
+id -u deploy >/dev/null 2>&1 || useradd --no-create-home --user-group --password '*' -c "Deploy" deploy
+cat > ~deploy/capp <<'EOF'
+#!/bin/sh
+exec sudo -u compose /usr/local/bin/capp $SSH_ORIGINAL_COMMAND "$@"
+EOF
+chmod +x ~deploy/capp
+chmod g+w ~deploy/dca
+chown -R deploy: ~deploy
+chown -R :compose ~deploy/dca
+grep -q '^Math User deploy' /etc/ssh/sshd_config || cat >> /etc/ssh/sshd_config <<EOF
+Match User deploy
+	AllowAgentForwarding no
+        AllowTcpForwarding no
+        X11Forwarding no
+        PermitTunnel no
+        DisableForwarding yes
+	ForceCommand /home/deploy/capp
+        AuthorizedKeysFile /etc/deploy-authorized-keys
+EOF
+touch /etc/deploy-authorized-keys
+groups compose | grep -q '\<docker\>' || usermod -a -G docker compose
+groups compose | grep -q '\<systemd-journal\>' || usermod -a -G systemd-journal compose
+groups compose | grep -q '\<deploy\>' || usermod -a -G deploy compose
+cat > /etc/sudoers.d/compose <<EOF
+# Allow members of compose group to execute compose-dirs command
+Cmnd_Alias COMPOSE_DIRS = /usr/local/bin/compose-dirs
+Cmnd_Alias COMPOSE_SVC = /usr/bin/systemctl start compose@*, /usr/bin/systemctl stop compose@*, /usr/bin/systemctl restart compose@*
+%compose   ALL= NOPASSWD: COMPOSE_DIRS, COMPOSE_SVC
+EOF
+cat > /etc/sudoers.d/deploy <<EOF
+# Allow members of deploy group to execute capp command
+Cmnd_Alias CAPP_CMD = /usr/local/bin/capp
+%deploy   ALL=(compose) NOPASSWD: CAPP_CMD
+EOF
+chmod u=r,g=r,o= /etc/sudoers.d/{compose,deploy}
+cd /etc/compose/dca
+docker-compose pull
+cd /etc/compose/proxy
+docker-compose pull
+rm -rf $tmpdir
+set -x
+/usr/local/bin/compose-dirs install
+/usr/local/bin/compose-dirs update
+/usr/local/bin/compose-dirs start
+exit 0
+##########

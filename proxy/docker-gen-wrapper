@@ -1,0 +1,38 @@
+#!/bin/sh
+# https://github.com/jwilder/docker-gen/issues/244#issuecomment-404859953
+echo container started
+echo parameters: $@
+hup() {
+    echo SIGHUP received
+    if [ -z "$docker_gen_pid" ]; then
+        echo no pid: signal ignored
+    else
+        echo sending signal to pid: $docker_gen_pid
+        kill -HUP $docker_gen_pid
+    fi
+    wait
+}
+trap hup SIGHUP
+term() {
+    echo SIGTERM received
+    if [ -z "$docker_gen_pid" ]; then
+        exit 0
+    else
+        echo killing pid: $docker_gen_pid
+        kill $docker_gen_pid
+        wait
+        exit_code=$?
+        echo docker-gen terminated with exit code: $exit_code
+        exit $exit_code
+    fi
+}
+trap term SIGTERM
+while true; do
+    echo starting docker-gen...
+    /usr/local/bin/docker-gen $@ &
+    docker_gen_pid=$!
+    wait
+    docker_gen_pid=
+    echo docker-gen exited with code: $?
+    sleep 10
+done

@@ -1,0 +1,2 @@
+#!/bin/sh
+curl -sL 'https://github.com/jwilder/nginx-proxy/raw/master/nginx.tmpl' > "$(dirname "$0")/nginx.tmpl"
