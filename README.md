@@ -54,7 +54,7 @@ If you have your public key allowed, you could transfer a *dca* file and its sig
 
 ### Deploy
 
-`ssh deploy@node deploy ~deploy/dca/my.dca [clean] [nostart]`
+`ssh deploy@node deploy /home/deploy/dca/my.dca [clean] [nostart]`
 
 This will verify the file, extract it, install docker images, docker-compose config file, systemd service and start it.  
 If `clean` is provided, any pre-existing volumes will be deleted prior deploy.  
