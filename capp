@@ -11,6 +11,8 @@ if [ "$(id -un)" != "$compose_user" ]; then
     exit 1
 fi
 
+actions="dcas deploy undeploy apps start stop restart status logs"
+
 declare -A arguments
 read_arguments() {
     # format
@@ -59,8 +61,6 @@ read_arguments() {
     done
 }
 
-actions="deploy undeploy list start stop restart status logs"
-
 action_help() {
     me=$(basename "$0")
     echo "$me help|--help|ACTION" >&$2
@@ -84,18 +84,44 @@ get_service() {
     echo $tmpl_name@$(systemd-escape --suffix service "$1${2:+/$2}")
 }
 
+help_dcas() {
+    echo "dcas [check]"
+    echo "  List all Docker Compose Archives (DCAs) that can be deployed."
+    echo "  check: verify sha256 for each archive"
+}
+action_dcas() {
+    dcas=$(find /home/deploy/dca -maxdepth 1 -name '*.dca' -printf '%f\n' | sort)
+    read_arguments docheck=check -- "$@"
+    if [ ${arguments[docheck]} -eq 1 ]; then
+        cd /home/deploy/dca
+        for dca in $dcas; do
+            if [ -e $dca.sha256 ]; then
+                sha256sum -c $dca.sha256 2>/dev/null || true
+            else
+                echo "$dca: MISSING .sha256"
+            fi
+        done
+    else
+        echo "$dcas"
+    fi
+}
+
 help_deploy() {
     echo "deploy DCA_ARCHIVE [clean] [nostart]"
-    echo "  Deploy the specified DCA archive, overwriting any existing application with the same name and environment."
+    echo "  Deploy the specified DCA archive (should exists in /home/deploy/dca with its .sha256 checksum file),"
+    echo "    overwriting any existing application with the same name and environment."
     echo "  clean: first stop and remove all volumes"
     echo "  nostart: deploy the archive but do not start the application"
 }
 action_deploy() {
     read_arguments rlz doclean=clean nostart=nostart -- "$@"
-    rlz="${arguments[rlz]}"
+    rlz=$(readlink -f /home/deploy/dca/"${arguments[rlz]}")
+    # ensure path is correct and no / or .. manipulation is done
+    [ "$(dirname "${rlz}")" = "/home/deploy/dca" ]
+    echo "${rlz}" | grep -q '\.dca$' || rlz="${rlz}.dca"
     [ -f "${rlz}" ]
     [ -f "${rlz}.sha256" ]
-    echo "deploy $rlz"
+    echo "deploy $(basename $rlz .dca)"
     (cd "$(dirname "$rlz")" && sha256sum -c "${rlz}.sha256")
     tmp=$(mktemp -d)
     trap "rm -rf $tmp 2>/dev/null" EXIT INT TERM
@@ -193,12 +219,12 @@ action_undeploy() {
     fi
 }
 
-help_list() {
-    echo "list [verbose]"
+help_apps() {
+    echo "apps [verbose]"
     echo "  List all applications (name and env) configured on this node."
     echo "  verbose: show status while listing"
 }
-action_list() {
+action_apps() {
     read_arguments dostatus=verbose -- "$@"
     if [ ${arguments[dostatus]} -eq 1 ]; then
         for s in $(cut -d: -f1 $compose_dir/$deps_file | grep -E '/.+' | sort); do

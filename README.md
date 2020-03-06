@@ -52,6 +52,12 @@ If you have your public key allowed, you could transfer a *dca* file and its sig
 
 `scp -P 122 my.dca* dca@node:`
 
+### Check upload ok
+
+`ssh deploy@node dcas [check]`
+
+Without `check`, it will only list *dca* files. With it, it will also indicate if checksum is ok or not.
+
 ### Deploy
 
 `ssh deploy@node deploy /home/deploy/dca/my.dca [clean] [nostart]`
@@ -72,7 +78,7 @@ Be careful, volumes may contains data not backuped!
 
 This will exit with `0` status if undeploy was ok, greater number in case of error.
 
-### Start, Restart, Stop, Status, Logs
+### Apps, Start, Restart, Stop, Status, Logs
 
 See `ssh deploy@node help` for an exhaustive list of all actions and options.
 
