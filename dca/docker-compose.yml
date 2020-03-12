@@ -1,7 +1,7 @@
 version: "2.4"
 services:
     scp:
-        image: jrdasm/sshd
+        image: panubo/sshd:1.2.0
         environment:
             - "SCP_MODE=true"
             - "MOTD=Docker Compose Archives"
