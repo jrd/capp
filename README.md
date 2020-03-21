@@ -26,7 +26,7 @@ Be sure to have your `sshd` service up and running.
 Configuration
 -------------
 
-Users allowed to upload *DCA* files should have their public keys in `/etc/compose/dca/users-keys`.
+Users allowed to upload [*DCA*](https://github.com/jrd/dca_format) files should have their public keys in `/etc/dca-authorized-keys`.
 For more information see the [dca readme](dca/README.md).
 
 Users allowed to act on deployments should have their public keys in `/etc/deploy-authorized-keys`.
