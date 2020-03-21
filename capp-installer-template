@@ -1,8 +1,8 @@
 #!/bin/bash
-COMPOSE_SYSTEMD_VER=1.1.0
+COMPOSE_SYSTEMD_VER=1.2.0
 set -e
 if [ -z "$2" ]; then
-    echo "$0 default_hostname default_email" >&2
+    echo "$0 default_hostname default_email [nohttps]" >&2
     exit 1
 fi
 if [ $(id -u) -ne 0 ]; then
@@ -19,15 +19,25 @@ me=$(readlink -f "$0")
 offset=$(($(sed -rn '/#{10}/=' "$me") + 1))
 dh="$1"
 de="$2"
+[ "$3" = "nohttps" ] && nohttps=1 || nohttps=0
 tmpdir=$(mktemp -d)
 cd $tmpdir
 curl -Ls https://github.com/jrd/compose-systemd/archive/v${COMPOSE_SYSTEMD_VER}.tar.gz | tar xzf -
 tail -n+$offset "$me" | base64 -d | tar xJf -
 cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs.conf /etc/
 cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs /usr/local/bin/
+ln -sf $(which docker-compose) /usr/local/bin/dc
 mkdir -p /var/docker-volumes/nginx-proxy/{vhost.d,certs} /etc/compose /home/deploy/dca
 id -u compose >/dev/null 2>&1 || useradd --home-dir /etc/compose --no-create-home --user-group --shell /usr/sbin/nologin -c "Compose" -l compose
 cp -r proxy dca /etc/compose/
+if [ "$nohttps" -eq 1 ]; then
+    # delete the letsencrypt service
+    sed -ri '/letsencrypt/,/certs:rw/d' /etc/compose/proxy/docker-compose.yml
+    # do not bind the 443 port on the host
+    sed -ri '/:443/d' /etc/compose/proxy/docker-compose.yml
+    # do not redirect http access to https
+    sed -ri '/Env\.HTTPS_METHOD/s/redirect/nohttps/' /etc/compose/proxy/nginx.tmpl
+fi
 sed -ri "s/dca:1000:1000/dca:$(id -u compose):$(id -g compose)/" /etc/compose/dca/docker-compose.yml
 cp capp /usr/local/bin
 chown compose: /usr/local/bin/capp
@@ -55,17 +65,19 @@ chmod +x ~deploy/capp
 chmod g+w ~deploy/dca
 chown -R deploy: ~deploy
 chown -R :compose ~deploy/dca
-grep -q '^Math User deploy' /etc/ssh/sshd_config || cat >> /etc/ssh/sshd_config <<EOF
+grep -q '^Match User deploy' /etc/ssh/sshd_config || cat >> /etc/ssh/sshd_config <<EOF
 Match User deploy
 	AllowAgentForwarding no
         AllowTcpForwarding no
         X11Forwarding no
         PermitTunnel no
         DisableForwarding yes
+        PasswordAuthentication no
 	ForceCommand /home/deploy/capp
         AuthorizedKeysFile /etc/deploy-authorized-keys
 EOF
 touch /etc/deploy-authorized-keys
+ln -sf /etc/compose/dca/users-keys /etc/dca-authorized-keys
 groups compose | grep -q '\<docker\>' || usermod -a -G docker compose
 groups compose | grep -q '\<systemd-journal\>' || usermod -a -G systemd-journal compose
 groups compose | grep -q '\<deploy\>' || usermod -a -G deploy compose
