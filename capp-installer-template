@@ -63,9 +63,9 @@ cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs.conf /etc/
 cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs /usr/local/bin/
 ln -sf $(which docker-compose) /usr/local/bin/dc
 mkdir -p /var/docker-volumes/nginx-proxy/{vhost.d,certs} /etc/compose /home/deploy/dca
-chown :compose /var/docker-volumes/nginx-proxy/vhost.d
-chmd g+w /var/docker-volumes/nginx-proxy/vhost.d
 id -u compose >/dev/null 2>&1 || useradd --home-dir /etc/compose --no-create-home --user-group --shell /usr/sbin/nologin -c "Compose" -l compose
+chown :compose /var/docker-volumes/nginx-proxy/vhost.d
+chmod g+w /var/docker-volumes/nginx-proxy/vhost.d
 cp -r proxy dca /etc/compose/
 if [ "$nohttps" -eq 1 ]; then
     # delete the letsencrypt service

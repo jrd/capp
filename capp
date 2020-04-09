@@ -220,7 +220,6 @@ class CApp:
         # apps
         sp = sps.add_parser('apps', formatter_class=PositionalFirstHelpFormatter,
                             help="List all applications (name and environment) configured on this node")
-        add_app_env_args(sp)
         sp.add_argument('--verbose', action='store_true',
                         help="Show status while listing")
         sp.set_defaults(func=self.action_apps)
