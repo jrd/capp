@@ -44,13 +44,22 @@ from yaml import (
 )
 
 
+def printflush(*args, **kwargs):
+    kwargs.pop('flush', None)
+    kwargs['flush'] = True
+    print(*args, **kwargs)
+
+
 def error(msg, code=None):
-    print(msg, file=stderr)
+    printflush(msg, file=stderr)
     if code is not None:
         exit(code)
 
 
 def die(msg):
+    if isinstance(msg, Exception):
+        from traceback import print_exc
+        print_exc()
     error(str(msg), 1)
 
 
@@ -219,6 +228,7 @@ class CApp:
         # apps
         sp = sps.add_parser('apps', formatter_class=PositionalFirstHelpFormatter,
                             help="List all applications (name and environment) configured on this node")
+        add_app_env_args(sp)
         sp.add_argument('--verbose', action='store_true',
                         help="Show status while listing")
         sp.set_defaults(func=self.action_apps)
@@ -277,17 +287,18 @@ class CApp:
             for f in dcas:
                 fsha = f.with_suffix('.dca.sha256')
                 if fsha.is_file():
+                    printflush(f"{f.name}: ", end='')
                     expected_sha256 = open(fsha).read().split(' ')[0]
-                    actual_sha256 = sha256(open(f).read()).hexdigest()
+                    actual_sha256 = sha256(open(f, 'rb').read()).hexdigest()
                     if expected_sha256 == actual_sha256:
-                        print(f"{f.name}: OK")
+                        printflush("OK")
                     else:
-                        print(f"{f.name}: FAILED")
+                        printflush("FAILED")
                 else:
-                    print(f"{f.name}: MISSING .sha256")
+                    printflush("MISSING .sha256")
         else:
             for f in dcas:
-                print(f.name)
+                printflush(f.name)
 
     def action_deploy(self, args):
         dca = (self.dca_dir / args.dca_file).resolve()
@@ -295,12 +306,12 @@ class CApp:
             raise ValueError(f"{args.dca_file} is incorrect")
         if not dca.with_suffix('.dca.sha256').is_file():
             raise ValueError(f"{args.dca_file}.sha256 is missing")
-        print(f"Deploying {dca.name}…")
+        printflush(f"Deploying {dca.name}…")
         expected_sha256 = open(dca.with_suffix('.dca.sha256')).read().split(' ')[0]
-        actual_sha256 = sha256(open(dca).read()).hexdigest()
+        actual_sha256 = sha256(open(dca, 'rb').read()).hexdigest()
         if expected_sha256 != actual_sha256:
             raise ValueError(f"{dca.name}: FAILED")
-        print(f"{dca.name}: 'OK'")
+        printflush(f"{dca.name}: 'OK'")
         with temp_dir() as tmpd:
             with taropen(dca, 'r:*') as tar:
                 tar.extractall(path=tmpd)
@@ -340,7 +351,7 @@ class CApp:
                         if location_nginx_config_file.is_file():
                             copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
         with open(target_dir / '.env', 'w') as f:
-            f.write(f"COMPOSE_PROJECT_NAME=${app}-${target_env}\n")
+            f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n")
         if 'networks' not in dc:
             dc['networks'] = {}
         dc['networks']['proxy'] = {
@@ -363,12 +374,12 @@ class CApp:
                     svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc}_vhost_port', '80')}")
                 if 'networks' not in svc_def:
                     svc_def['networks'] = []
-                if isinstance(svc_def['environment'], dict):
+                if isinstance(svc_def['networks'], dict):
                     svc_def['networks']['proxy'] = {}
                 else:  # list
                     svc_def['networks'].append('proxy')
-            svc_def['mem_limit'] = limits.mem[svc]
-            svc_def['mem_reservation'] = limits.mem_avg[svc]
+            svc_def['mem_limit'] = f'{limits.mem[svc]}B'
+            svc_def['mem_reservation'] = f'{limits.mem_avg[svc]}B'
             svc_def['mem_swappiness'] = 10
             svc_def['oom_score_adj'] = 500  # prefer to kill containers than system processes
             # min = 1024 ÷ 4 (cpu = 1), avg = 1024 (cpu = 4), max 1024 × 4 (cpu = 16)
@@ -387,7 +398,7 @@ class CApp:
         systemd_svc = self._get_systemd_service_name(app, target_env)
         if args.start:
             run(['sudo', 'systemctl', 'restart', systemd_svc], check=True, text=True)
-        elif run(['systemctl', 'is-active', systemd_svc], capture_output=True).return_code == 0:
+        elif run(['systemctl', 'is-active', systemd_svc], capture_output=True).returncode == 0:
             run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
 
     def _get_systemd_service_name(self, app, env=None):
@@ -410,10 +421,10 @@ class CApp:
             raise ValueError(f"target environment '{target_env or ''}' should be a valid env: {', '.join(self.allowed_envs)}")
 
     def _check_compose(self, compose_file, version):
-        if run(['docker-compose', '-f', str(compose_file), 'config', '-q'], capture_output=True).return_code:
+        if run(['docker-compose', '-f', str(compose_file), 'config', '-q'], capture_output=True).returncode:
             raise ValueError(f'{compose_file.name} is incorrect')
         svc_names = []
-        limits = namedtuple('ResLimits', 'mem mem_avg cpu', defaults=({},) * 4)()
+        limits = namedtuple('ResLimits', 'mem mem_avg cpu')({}, {}, {})
         with open(compose_file) as f:
             dc = full_load(f)
         for svc_name, svc_def in dc.get('services', {}).items():
@@ -432,8 +443,8 @@ class CApp:
                 self._verify_resources(res_name, res_def, limits)
         return dc, svc_names, limits
 
-    def verify_compose_service(self, name, definition):
-        for key in definition.keys():
+    def _verify_compose_service(self, name, definition):
+        for key in (definition or {}).keys():
             if key not in (
                 'build',
                 'cap_drop',
@@ -483,14 +494,14 @@ class CApp:
                         ):
                             raise ValueError(f"key {subkey}, defined for {name}.{key} is not allowed in services section")
             elif key == 'extends':
-                for subkey in definition[key].keys():
+                for subkey in (definition[key] or {}).keys():
                     if subkey not in (
                         'file',
                         'service',
                     ):
                         raise ValueError(f"key {subkey}, defined for {name}.{key} is not allowed in services section")
             elif key == 'healthcheck':
-                for subkey in definition[key].keys():
+                for subkey in (definition[key] or {}).keys():
                     if subkey not in (
                         'test',
                         'interval',
@@ -514,31 +525,31 @@ class CApp:
                         if vol_src and not match(r'[a-zA-Z]', vol_src) and not vol_src.startswith('./'):
                             raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
 
-    def verify_compose_volume(self, name, definition):
-        for key in definition.keys():
+    def _verify_compose_volume(self, name, definition):
+        for key in (definition or {}).keys():
             if key not in ('external', 'labels', 'name'):
                 raise ValueError(f"key {key}, defined for {name} is not allowed in volumes section")
 
-    def verify_compose_network(self, name, definition):
-        for key in definition.keys():
+    def _verify_compose_network(self, name, definition):
+        for key in (definition or {}).keys():
             if key not in ('external', 'internal', 'labels', 'name'):
                 raise ValueError(f"key {key}, defined for {name} is not allowed in networks section")
 
-    def verify_resources(self, name, definition, limits):
-        for key in definition.keys():
+    def _verify_resources(self, name, definition, limits):
+        for key in (definition or {}).keys():
             if key not in ('memory', 'memory_avg', 'cpu'):
                 raise ValueError(f"key {key}, defined for {name} is not allowed in x-resources section")
             elif key == 'cpu':
-                if definition[key] < 1 or definition[key] > 16:
+                if not 1 <= definition[key] <= 16:
                     raise ValueError(f"key {key}, defined for {name} should have a value between [1; 16], in x-resources section")
                 limits.cpu[name] = definition[key]
             else:
-                if not any(
+                if not any((
                     definition[key].endswith('B'),
                     definition[key].endswith('K'),
                     definition[key].endswith('M'),
                     definition[key].endswith('G'),
-                ):
+                )):
                     raise ValueError(f"key {key}, defined for {name} should have a unit value of B, K, M or G, in x-resources section")
                 if not search(r'^[0-9]+$', definition[key][:-1]):
                     raise ValueError(f"key {key}, defined for {name} should have a valid postive integer value, in x-resources section")
@@ -557,14 +568,16 @@ class CApp:
                 raise ValueError(f"memory average limit of {self._to_unit(limit_avg)} exceeds memory limit of {self._to_unit(limit)}")
         for name, cpu in limits.cpu.items():
             if not 1 <= cpu <= 16:
-                raise ValueError(f"cpu weight limit of {cpu} should in [1; 16] range")
+                raise ValueError(f"cpu weight limit of {cpu} should be in [1; 16] range")
 
     def _load_images(self, image_files):
+        printflush(end='')
         for image_file in image_files:
             run(f'zcat "{str(image_file)}" | docker image load', shell=True, check=True, text=True)
         run(['docker', 'image', 'prune', '-f'], text=True)
 
     def _clean_volumes(self, target_dir):
+        printflush(end='')
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
             run(['docker-compose', 'down', '-v'], cwd=target_dir, text=True)
 
@@ -579,7 +592,7 @@ class CApp:
         app = args.app
         target_env = args.env
         self._check_app_name_target_env(app, target_env)
-        print(f"Undeploying {app}/{target_env}…")
+        printflush(f"Undeploying {app}/{target_env}…")
         systemd_svc = self._get_systemd_service_name(app, target_env)
         run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
         deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
@@ -621,12 +634,12 @@ class CApp:
             deps = [l.strip() for l in f if search(r'/.+:', l)]
             for dep in sorted(deps):
                 app, env = dep.split(':')[0].split('/')
-                print(f'{app} {env}')
+                printflush(f'{app} {env}')
                 if args.verbose:
                     svc = self._get_systemd_service_name(app, env)
                     raw_status = run(['systemctl', 'status', '--no-pager', svc], env={'SYSTEMD_COLORS': '1'}, capture_output=True).stdout
                     status = ''.join([l.replace('Active: ', '') for l in raw_status.split('\n') if search(r'Active:', l)])
-                    print(status)
+                    printflush(status)
 
     def action_start(self, args):
         app = args.app
