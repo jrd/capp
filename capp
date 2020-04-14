@@ -138,7 +138,6 @@ class CApp:
         with open('/etc/capp.conf') as f:
             parser.read_file(chain(('[def]',), f), source=f.name)
         cfg = dict(parser['def'])
-        cfg['max_disk_size'] = self._to_bytes(cfg.get('max_disk_size', '10240M'))
         cfg['max_mem_size'] = self._to_bytes(cfg.get('max_mem_size', '10240M'))
         cfg['default_hostname'] = cfg.get('default_hostname', getfqdn())
         return cfg
@@ -368,7 +367,6 @@ class CApp:
                     svc_def['networks']['proxy'] = {}
                 else:  # list
                     svc_def['networks'].append('proxy')
-            svc_def['storage_opt'] = {'size': limits.disk[svc]}
             svc_def['mem_limit'] = limits.mem[svc]
             svc_def['mem_reservation'] = limits.mem_avg[svc]
             svc_def['mem_swappiness'] = 10
@@ -415,12 +413,11 @@ class CApp:
         if run(['docker-compose', '-f', str(compose_file), 'config', '-q'], capture_output=True).return_code:
             raise ValueError(f'{compose_file.name} is incorrect')
         svc_names = []
-        limits = namedtuple('ResLimits', 'disk mem mem_avg cpu', defaults=({},) * 4)()
+        limits = namedtuple('ResLimits', 'mem mem_avg cpu', defaults=({},) * 4)()
         with open(compose_file) as f:
             dc = full_load(f)
         for svc_name, svc_def in dc.get('services', {}).items():
             svc_names.append(svc_name)
-            limits.disk[svc_name] = 100 * u.M if version > 1 else 1 * u.G
             limits.mem[svc_name] = 300 * u.M if version > 1 else 1 * u.G
             limits.mem_avg[svc_name] = 100 * u.M if version > 1 else 300 * u.M
             limits.cpu[svc_name] = 4
@@ -529,7 +526,7 @@ class CApp:
 
     def verify_resources(self, name, definition, limits):
         for key in definition.keys():
-            if key not in ('disk', 'memory', 'memory_avg', 'cpu'):
+            if key not in ('memory', 'memory_avg', 'cpu'):
                 raise ValueError(f"key {key}, defined for {name} is not allowed in x-resources section")
             elif key == 'cpu':
                 if definition[key] < 1 or definition[key] > 16:
@@ -546,19 +543,13 @@ class CApp:
                 if not search(r'^[0-9]+$', definition[key][:-1]):
                     raise ValueError(f"key {key}, defined for {name} should have a valid postive integer value, in x-resources section")
                 value = self._to_bytes(definition[key])
-                if key == 'disk':
-                    limits.disk[name] = value
-                elif key == 'memory':
+                if key == 'memory':
                     limits.mem[name] = value
                 elif key == 'memory_avg':
                     limits.mem_avg[name] = value
 
     def _check_limits(self, limits):
-        max_disk_size = self.capp_config['max_disk_size']
         max_mem_size = self.capp_config['max_mem_size']
-        for name, limit in limits.disk.items():
-            if limit > max_disk_size:
-                raise ValueError(f"disk limit of {self._to_unit(limit)} exceeds max defined limit of {self._to_unit(max_disk_size)}")
         for (name, limit), (_, limit_avg) in zip(sorted(limits.mem.items()), sorted(limits.mem_avg.items())):
             if limit > max_mem_size:
                 raise ValueError(f"memory limit of {self._to_unit(limit)} exceeds max defined limit of {self._to_unit(max_mem_size)}")

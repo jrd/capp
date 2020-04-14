@@ -1,11 +1,10 @@
 #!/bin/bash
 COMPOSE_SYSTEMD_VER=1.2.0
 set -e
-def_cont_disk='10G'
 def_cont_mem='10G'
 usage() {
-    echo "$0 default_hostname default_email [container_max_disk_size=$def_cont_disk] [container_max_memory_size=$def_cont_mem] [nohttps]" >&2
-    echo "  container_max_disk_size and container_max_memory_size should be expressed with M or G units" >&2
+    echo "$0 default_hostname default_email [container_max_memory_size=$def_cont_mem] [nohttps]" >&2
+    echo "  container_max_memory_size should be expressed with M or G units" >&2
     exit 1
 }
 if [ $(id -u) -ne 0 ]; then
@@ -24,7 +23,6 @@ dh="$1"
 [ -n "$dh" ] && shift || usage
 de="$1"
 [ -n "$dh" ] && shift || usage
-cont_disk=
 cont_mem=
 nohttps=0
 while [ -n "$1" ]; do
@@ -35,9 +33,7 @@ while [ -n "$1" ]; do
             nohttps=1
             ;;
         *M|*G)
-            if [ -z "$cont_disk" ]; then
-                cont_disk="$p"
-            elif [ -z "$cont_mem" ]; then
+            if [ -z "$cont_mem" ]; then
                 cont_mem="$p"
             else
                 usage
@@ -48,10 +44,8 @@ while [ -n "$1" ]; do
             ;;
     esac
 done
-[ -n "$cont_disk" ] || cont_disk=$def_cont_disk
 [ -n "$cont_mem" ] || cont_mem=$def_cont_mem
 cat > /etc/capp.conf <<EOF
-max_disk_size=${cont_disk}
 max_mem_size=${cont_mem}
 default_hostname=${dh}
 EOF
