@@ -49,6 +49,7 @@ cat > /etc/capp.conf <<EOF
 max_mem_size=${cont_mem}
 default_hostname=${dh}
 EOF
+mkdir -p /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy}
 tmpdir=$(mktemp -d)
 cd $tmpdir
 curl -Ls https://github.com/jrd/compose-systemd/archive/v${COMPOSE_SYSTEMD_VER}.tar.gz | tar xzf -
@@ -60,6 +61,7 @@ mkdir -p /var/docker-volumes/nginx-proxy/{vhost.d,certs} /etc/compose /home/depl
 id -u compose >/dev/null 2>&1 || useradd --home-dir /etc/compose --no-create-home --user-group --shell /usr/sbin/nologin -c "Compose" -l compose
 chown :compose /var/docker-volumes/nginx-proxy/vhost.d
 chmod g+w /var/docker-volumes/nginx-proxy/vhost.d
+[ -f /etc/compose/dca/users-keys ] && cp /etc/compose/dca/users-keys dca/
 cp -r proxy dca /etc/compose/
 if [ "$nohttps" -eq 1 ]; then
     # delete the letsencrypt service
@@ -70,13 +72,14 @@ if [ "$nohttps" -eq 1 ]; then
     sed -ri '/Env\.HTTPS_METHOD/s/redirect/nohttps/' /etc/compose/proxy/nginx.tmpl
 fi
 sed -ri "s/dca:1000:1000/dca:$(id -u compose):$(id -g compose)/" /etc/compose/dca/docker-compose.yml
-cp capp /usr/local/bin
+mkdir -p /usr/local/bin
+cp capp verify_dca.py /usr/local/bin/
 chown compose: /usr/local/bin/capp
 cat > /etc/compose/proxy/.env <<EOF
 DEFAULT_HOST=$dh
 DEFAULT_EMAIL=$de
 EOF
-if [ -e /etc/compose/compose.deps ]; then
+if [ -f /etc/compose/compose.deps ]; then
     for svc in proxy dca; do
         grep -q "^$svc:" /etc/compose/compose.deps || echo "$svc:" >> /etc/compose/compose.deps
     done
