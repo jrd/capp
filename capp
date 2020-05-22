@@ -1,329 +1,737 @@
-#!/bin/bash
-set -e
-if [ ! -e /etc/compose-dirs.conf ]; then
-    echo "This script relies on compose-systemd: https://github.com/jrd/compose-systemd" >&2
-    echo "/etc/compose-dirs.conf file should exist" >&2
-    exit 1
-fi
-. /etc/compose-dirs.conf
-if [ "$(id -un)" != "$compose_user" ]; then
-    echo "This script should be run as $compose_user" >&2
-    exit 1
-fi
+#!/usr/bin/env python3
+from argparse import (
+    ArgumentParser,
+    RawTextHelpFormatter,
+)
+from collections import namedtuple
+from configparser import ConfigParser
+from contextlib import contextmanager
+from itertools import chain
+from os import (
+    execlp,
+    getuid,
+)
+from pathlib import Path
+from pwd import getpwuid
+from re import (
+    match,
+    search,
+    sub,
+)
+from shutil import (
+    copy,
+    rmtree,
+)
+from signal import (
+    getsignal,
+    signal,
+    Signals,
+)
+from socket import getfqdn
+from stat import (
+    S_IRUSR,
+    S_IXUSR,
+)
+from subprocess import run
+from sys import (
+    exit,
+    stderr,
+    version_info,
+)
+from tarfile import open as taropen
+from tempfile import mkdtemp
 
-actions="dcas deploy undeploy apps start stop restart status logs"
+from yaml import (
+    dump,
+    full_load,
+)
 
-declare -A arguments
-read_arguments() {
-    # format
-    # name1 name2 name3=value1 name4=value2 -- ARGUMENTS
-    #
-    # name1 and name2 will be mandatory position variables
-    # name3 and name4 are variables that will be set to 1 if value1 and value2
-    # are available in other arguments, else it will be 0
-    declare -a pos_vars
-    declare -A arg_vars
-    while [ -n "$1" ] && [ "$1" != "--" ]; do
-        variable="$1"
-        shift
-        if echo "$variable" | grep -q '='; then
-            value=$(echo $variable|cut -d= -f2-)
-            variable=$(echo $variable|cut -d= -f1)
-            arg_vars["$value"]=$variable
-        else
-            pos_vars+=("$variable")
-        fi
-    done
-    [ "$1" == "--" ] && shift
-    for var_name in ${pos_vars[*]}; do
-        arguments[$var_name]=""
-    done
-    for var_name in ${arg_vars[*]}; do
-        arguments[$var_name]=0
-    done
-    for var_name in ${pos_vars[*]}; do
-        if [ -n "$1" ]; then
-            arguments[$var_name]="$1"
-            shift
-        else
-            echo "$var_name is missing" >&2
-            exit 1
-        fi
-    done
-    while [ -n "$1" ]; do
-        if [ -n "${arg_vars[$1]}" ]; then
-            arguments[${arg_vars["$1"]}]=1
-            shift
-        else
-            echo "Unrecognized argument $1" >&2
-            exit 1
-        fi
-    done
-}
+from verify_dca import verify_checksum
 
-action_help() {
-    me=$(basename "$0")
-    echo "$me help|--help|ACTION" >&$2
-    echo "" >&$2
-    echo "ACTION:" >&$2
-    for action in $actions; do
-        fct="help_$action"
-        echo "" >&$2
-        $fct >&$2
-    done
-    exit $1
-}
 
-check_app_target_env() {
-    [ -n "$1" ]
-    echo "$1" | grep -q '[-_a-zA-Z0-9]'
-    [ -n "$2" ]
-    echo "$2" | grep -q -E '(dev|integ|recette|prod)'
-}
-get_service() {
-    echo $tmpl_name@$(systemd-escape --suffix service "$1${2:+/$2}")
-}
+def printflush(*args, **kwargs):
+    kwargs.pop('flush', None)
+    kwargs['flush'] = True
+    print(*args, **kwargs)
 
-help_dcas() {
-    echo "dcas [check]"
-    echo "  List all Docker Compose Archives (DCAs) that can be deployed."
-    echo "  check: verify sha256 for each archive"
-}
-action_dcas() {
-    dcas=$(find /home/deploy/dca -maxdepth 1 -name '*.dca' -printf '%f\n' | sort)
-    read_arguments docheck=check -- "$@"
-    if [ ${arguments[docheck]} -eq 1 ]; then
-        cd /home/deploy/dca
-        for dca in $dcas; do
-            if [ -e $dca.sha256 ]; then
-                sha256sum -c $dca.sha256 2>/dev/null || true
-            else
-                echo "$dca: MISSING .sha256"
-            fi
-        done
-    else
-        echo "$dcas"
-    fi
-}
 
-help_deploy() {
-    echo "deploy DCA_ARCHIVE [clean] [nostart]"
-    echo "  Deploy the specified DCA archive (should exists in /home/deploy/dca with its .sha256 checksum file),"
-    echo "    overwriting any existing application with the same name and environment."
-    echo "  clean: first stop and remove all volumes"
-    echo "  nostart: deploy the archive but do not start the application"
-}
-action_deploy() {
-    read_arguments rlz doclean=clean nostart=nostart -- "$@"
-    rlz=$(readlink -f /home/deploy/dca/"${arguments[rlz]}")
-    # ensure path is correct and no / or .. manipulation is done
-    [ "$(dirname "${rlz}")" = "/home/deploy/dca" ]
-    echo "${rlz}" | grep -q '\.dca$' || rlz="${rlz}.dca"
-    [ -f "${rlz}" ]
-    [ -f "${rlz}.sha256" ]
-    echo "deploy $(basename $rlz .dca)"
-    (cd "$(dirname "$rlz")" && sha256sum -c "${rlz}.sha256")
-    tmp=$(mktemp -d)
-    trap "rm -rf $tmp 2>/dev/null" EXIT INT TERM
-    tar -xvf "$rlz" -C $tmp
-    [ -f $tmp/metadata ] && [ -f $tmp/context/docker-compose.yml ] && [ -d $tmp/images ]
-    . $tmp/metadata
-    # unsure no metadata can rewrite any compose-dirs config
-    . /etc/compose-dirs.conf
-    check_app_target_env "$app" "$target_env"
-    [ -n "$app" ]
-    echo "$app" | grep -q '[-_a-zA-Z0-9]'
-    [ -n "$target_env" ]
-    echo "$target_env" | grep -q -E '(dev|integ|recette|prod)'
-    if [ $(ls $tmp/images/*.tar.gz 2>/dev/null|wc -l) -gt 0 ]; then
-      for image in $tmp/images/*.tar.gz; do
-        zcat $image | docker image load
-        rm $image
-      done
-      docker image prune -f || true
-    fi
-    cd "$compose_dir"
-    if [ ${arguments[doclean]} -eq 1 ] && [ -d $app/$target_env ]; then
-        (cd $app/$target_env && docker-compose down -v)
-    fi
-    mkdir -p $app/$target_env
-    mv $tmp/context/docker-compose.yml $app/$target_env/.orig.yml
-    cp -rv $tmp/context/* $app/$target_env/ 2>/dev/null || true
-    cd $app/$target_env/
-    echo "COMPOSE_PROJECT_NAME=${app}-${target_env}" > .env
-    cat > .proxy.yml <<EOF
-version: '2.4'
-networks:
-  "proxy":
-    external:
-      name: "proxy_network"
-services:
-EOF
-    domain=$(sed -r -n '/^DEFAULT_HOST/s/.*=(.*)/\1/p' ${compose_dir}/proxy/.env)
-    [ "$target_env" = "prod" ] && suffix=.${domain} || suffix=-${target_env}.${domain}
-    for svc in $(docker-compose -f .orig.yml config --services); do
-      vhost_var=${svc}_base_vhost
-      vhost=${!vhost_var}
-      port_var=${svc}_vhost_port
-      port=${!port_var:-80}
-      if [ -n "$vhost" ]; then
-        cat >> .proxy.yml <<EOF
-  $svc:
-    environment:
-      - "VIRTUAL_HOST=${vhost}${suffix}"
-      - "LETSENCRYPT_HOST=${vhost}${suffix}"
-      - "VIRTUAL_PORT=${port}"
-    networks:
-      - "proxy"
-EOF
-      fi
-    done
-    docker-compose -f .orig.yml -f .proxy.yml config > docker-compose.yml
-    sed -i "s|$PWD|.|g" docker-compose.yml
-    cd "$compose_dir"
-    grep -q "^${app}/${target_env}:" $deps_file && sed -r -i "/^${app}\/${target_env}:/d" $deps_file
-    echo "${app}/${target_env}:proxy" >> $deps_file
-    sudo compose-dirs update
-    svc=$(get_service $app $target_env)
-    if [ ${arguments[nostart]} -eq 0 ]; then
-      sudo systemctl restart $svc
-    elif systemctl is-active $svc > /dev/null; then
-      sudo systemctl stop $svc
-    fi
-}
+def error(msg, code=None):
+    printflush(msg, file=stderr)
+    if code is not None:
+        exit(code)
 
-help_undeploy() {
-    echo "undeploy APP_NAME ENV [all]"
-    echo "  Undeploy the specified application by first stopping it. No files removed unless all is specified."
-    echo "  ENV could be dev, integ, recette or prod"
-    echo "  all: also remove all volumes and images"
-}
-action_undeploy() {
-    read_arguments app target_env prune_all=all -- "$@"
-    app="${arguments[app]}"
-    target_env="${arguments[target_env]}"
-    check_app_target_env "$app" "$target_env"
-    echo "undeploy $app/$target_env"
-    svc=$(get_service $app $target_env)
-    sudo systemctl stop $svc
-    cd "$compose_dir"
-    grep -q "^${app}/${target_env}:" $deps_file && sed -r -i "/^${app}\/${target_env}:/d" $deps_file
-    sudo compose-dirs update
-    if [ -d $app/$target_env ]; then
-      cd $app/$target_env
-      [ ${arguments[prune_all]} -eq 1 ] && ARGS='-v --rmi all' || ARGS='--rmi local'
-      docker-compose down $ARGS 2>&1 | grep -v ^Network | grep -v '^Removing network'
-      cd "$compose_dir"
-      rm -rf $app/$target_env
-      rmdir $app 2>/dev/null || true
-    fi
-}
 
-help_apps() {
-    echo "apps [verbose]"
-    echo "  List all applications (name and env) configured on this node."
-    echo "  verbose: show status while listing"
-}
-action_apps() {
-    read_arguments dostatus=verbose -- "$@"
-    if [ ${arguments[dostatus]} -eq 1 ]; then
-        for s in $(cut -d: -f1 $compose_dir/$deps_file | grep -E '/.+' | sort); do
-            svc=$(get_service $s)
-            echo $s | sed 's|/| |g'
-            SYSTEMD_COLORS=1 systemctl status --no-pager $svc | sed -rn '/Active:/s/Active: //p'
-        done
-    else
-        cut -d: -f1 $compose_dir/$deps_file | grep -E '/.+' | sort | sed 's|/| |g'
-    fi
-}
+def die(msg):
+    if isinstance(msg, Exception):
+        from traceback import print_exc
+        print_exc()
+    error(str(msg), 1)
 
-help_start() {
-    echo "start APP_NAME ENV"
-    echo "  Start the application specified. The application should already exist on this node."
-    echo "  ENV could be dev, integ, recette or prod"
-}
-action_start() {
-    read_arguments app target_env -- "$@"
-    app="${arguments[app]}"
-    target_env="${arguments[target_env]}"
-    check_app_target_env "$app" "$target_env"
-    svc=$(get_service $app $target_env)
-    sudo systemctl start $svc
-}
 
-help_stop() {
-    echo "stop APP_NAME ENV"
-    echo "  Stop the application specified. The application should already exist on this node."
-    echo "  ENV could be dev, integ, recette or prod"
-}
-action_stop() {
-    read_arguments app target_env -- "$@"
-    app="${arguments[app]}"
-    target_env="${arguments[target_env]}"
-    check_app_target_env "$app" "$target_env"
-    svc=$(get_service $app $target_env)
-    sudo systemctl stop $svc
-}
+def check_python():
+    MIN_MAJ_VER = 3
+    MIN_MIN_VER = 7
+    if version_info.major < MIN_MAJ_VER or version_info.minor < MIN_MIN_VER:
+        die("Python3 version %d.%d minimum required" % (MIN_MAJ_VER, MIN_MIN_VER))
 
-help_restart() {
-    echo "restart APP_NAME ENV"
-    echo "  Restart the application specified. The application should already exist on this node."
-    echo "  ENV could be dev, integ, recette or prod"
-}
-action_restart() {
-    read_arguments app target_env -- "$@"
-    app="${arguments[app]}"
-    target_env="${arguments[target_env]}"
-    check_app_target_env "$app" "$target_env"
-    svc=$(get_service $app $target_env)
-    sudo systemctl restart $svc
-}
 
-help_status() {
-    echo "status APP_NAME ENV"
-    echo "  Show the systemd status for the application specified. The application should already exist on this node."
-    echo "  ENV could be dev, integ, recette or prod"
-}
-action_status() {
-    read_arguments app target_env -- "$@"
-    app="${arguments[app]}"
-    target_env="${arguments[target_env]}"
-    check_app_target_env "$app" "$target_env"
-    svc=$(get_service $app $target_env)
-    systemctl status --no-pager $svc
-}
+class PositionalFirstHelpFormatter(RawTextHelpFormatter):
+    def _format_actions_usage(self, actions, groups):
+        # actions are optionals + positionals, opposite is wanted
+        actions = [a for a in actions if not a.option_strings] + [a for a in actions if a.option_strings]
+        return super()._format_actions_usage(actions, groups)
 
-help_logs() {
-    echo "logs APP_NAME ENV [nopager]"
-    echo "  Show the global logs (all services) for the application specified. The application should already exist on this node."
-    echo "  ENV could be dev, integ, recette or prod"
-    echo "  nopager: the logs are output directly, without a pager"
-    echo "    else a pager is used, placed you at the end and should be quit with Ctrl-C"
-}
-action_logs() {
-    read_arguments app target_env nopager=nopager -- "$@"
-    app="${arguments[app]}"
-    target_env="${arguments[target_env]}"
-    check_app_target_env "$app" "$target_env"
-    svc=$(get_service $app $target_env)
-    if [ ${arguments[nopager]} -eq 1 ]; then
-        journalctl --no-pager -u $svc
-    else
-        journalctl -feu $svc
-    fi
-}
 
-if [ -n "$1" ]; then
-    action="$1"
-    shift
-    if echo "$action" | grep -q -E 'help|--help'; then
-        action_help 0 1
-    elif echo "$action" | grep -q -E $(echo "$actions"|sed 's/ /|/g'); then
-        fct="action_$action"
-        $fct "$@"
-    else
-        action_help 1 2
-    fi
-else
-    action_help 1 2
-fi
+@contextmanager
+def trap(handler, signals=(Signals.SIGTERM, Signals.SIGINT)):
+    prevs = {}
+    for s in signals:
+        prevs[s] = getsignal(s)
+        signal(s, handler)
+    yield None
+    for s, s_handler in prevs.items():
+        if s_handler is not None:
+            signal(s, s_handler)
+
+
+@contextmanager
+def temp_dir():
+    tmpd = Path(mkdtemp())
+
+    def rm_tmpd():
+        rmtree(tmpd, ignore_errors=True)
+    with trap(rm_tmpd):
+        try:
+            yield tmpd
+        finally:
+            rm_tmpd()
+
+
+def copy_tree(src, dst, ignored=None):
+    if not dst.exists():
+        dst.mkdir(parents=True, exist_ok=True)
+    for item_src in src.iterdir():
+        if ignored(item_src):
+            continue
+        item_dst = dst / item_src.name
+        if item_src.is_dir():
+            copy_tree(item_src, item_dst, ignored)
+        else:
+            copy(item_src, item_dst)
+
+
+u = namedtuple('Unit', 'B K M G')(1, 1024, 1024 * 1024, 1024 * 1024 * 1024)
+
+
+class CApp:
+    def __init__(self):
+        self.config = None
+        self.allowed_envs = ('dev', 'integ', 'staging', 'demo', 'prod')
+        self.dca_dir = Path('/home/deploy/dca')
+
+    def _check(self):
+        self.compose_dirs_config = self._read_compose_dirs_config()
+        self.capp_config = self._read_capp_config()
+        self._check_user()
+
+    def _read_compose_dirs_config(self):
+        if not Path('/etc/compose-dirs.conf').is_file():
+            raise ValueError(
+                "This script relies on compose-systemd: https://github.com/jrd/compose-systemd"
+                "\n/etc/compose-dirs.conf file should exist"
+            )
+        parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
+        with open('/etc/compose-dirs.conf') as f:
+            parser.read_file(chain(('[def]',), f), source=f.name)
+        return dict(parser['def'])
+
+    def _read_capp_config(self):
+        if not Path('/etc/capp.conf').is_file():
+            raise ValueError("/etc/capp.conf file should exist")
+        parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
+        with open('/etc/capp.conf') as f:
+            parser.read_file(chain(('[def]',), f), source=f.name)
+        cfg = dict(parser['def'])
+        cfg['max_mem_size'] = self._to_bytes(cfg.get('max_mem_size', '10240M'))
+        cfg['default_hostname'] = cfg.get('default_hostname', getfqdn())
+        return cfg
+
+    def _iter_hooks(self, action, step):
+        """
+        action could be deploy or undeploy
+        step could be pre or post
+        """
+        hooks_dir = Path('/etc/capp/hooks.d') / f'{step}_{action}'
+        hooks = []
+        if hooks_dir.is_dir():
+            for f in hooks_dir.iterdir():
+                if f.is_file():
+                    mode = f.lstat().st_mode
+                    # read an execute rights
+                    if mode & S_IRUSR != 0 and mode & S_IXUSR != 0:
+                        hooks.append(f)
+        return sorted(hooks)
+
+    def _run_hook(self, hook_file, app, target_env, version, compose_file, target_dir):
+        run([hook_file, app, target_env, version, compose_file, target_dir], stdin=0, check=True, text=True)
+
+    def _to_bytes(self, value_unit):
+        if not value_unit:
+            return None
+        elif value_unit.endswith('B'):
+            return int(round(float(value_unit[:-1]) * u.B))
+        elif value_unit.endswith('K'):
+            return int(round(float(value_unit[:-1]) * u.K))
+        elif value_unit.endswith('M'):
+            return int(round(float(value_unit[:-1]) * u.M))
+        elif value_unit.endswith('G'):
+            return int(round(float(value_unit[:-1]) * u.G))
+        else:
+            return None
+
+    def _to_unit(self, value_bytes):
+        if not value_bytes:
+            return None
+        elif value_bytes >= u.G:
+            return f'{value_bytes / u.G:.2f}G'.replace('.00G', 'G').replace('0G', 'G')
+        elif value_bytes >= u.M:
+            return f'{value_bytes / u.M:.2f}M'.replace('.00M', 'M').replace('0M', 'M')
+        elif value_bytes >= u.K:
+            return f'{value_bytes / u.K:.2f}K'.replace('.00K', 'K').replace('0K', 'K')
+        else:
+            return value_bytes
+
+    def _check_user(self):
+        current_user_name = getpwuid(getuid()).pw_name
+        expected_user_name = self.compose_dirs_config.get('compose_user', '')
+        if current_user_name != expected_user_name:
+            raise ValueError(f"This script should be run as {expected_user_name}")
+
+    def _append_usage_to_subcommands(self, sps):
+        for name, sp in sps._name_parser_map.items():
+            ca = next(iter(ca for ca in sps._choices_actions if ca.metavar == name), None)
+            if ca:
+                usage = sub(rf'.+ {name} ', '  ', sp.format_usage())
+                ca.help += f'\n{usage}'
+
+    def _read_arguments(self):
+        parser = ArgumentParser(formatter_class=PositionalFirstHelpFormatter)
+        sps = parser.add_subparsers(title='actions', metavar='ACTION', required=True,
+                                    description="Use ACTION -h|--help to get full help on any action",
+                                    help="One of the following action is required\n ")
+        # dcas
+        sp = sps.add_parser('dcas', formatter_class=PositionalFirstHelpFormatter,
+                            help="List all Docker Compose Archives (DCAs) that can be deployed.")
+        sp.add_argument('--check', action='store_true',
+                        help="verify each archive checksum")
+        sp.set_defaults(func=self.action_dcas)
+        # deploy
+        sp = sps.add_parser('deploy', formatter_class=PositionalFirstHelpFormatter,
+                            help="Deploy the specified DCA file,"
+                            "\noverwriting any existing application with the same name and environment.")
+        sp.add_argument('dca_file', metavar='DCA_FILE',
+                        help="DCA file as listed by the 'dcas' command")
+        sp.add_argument('--clean', action='store_true',
+                        help="first stop and remove all volumes")
+        sp.add_argument('--nostart', action='store_false', dest='start',
+                        help="deploy the archive but do not start the application")
+        sp.set_defaults(func=self.action_deploy)
+
+        # app env shortcut func
+        def add_app_env_args(sp):
+            sp.add_argument('app', metavar='APP_NAME', help="Application name")
+            sp.add_argument('env', metavar='ENV', help=f"Environment name, one of {', '.join(self.allowed_envs)}")
+        # undeploy
+        sp = sps.add_parser('undeploy', formatter_class=PositionalFirstHelpFormatter,
+                            help="Undeploy the specified application by first stopping it."
+                            "\nNo data removed unless all is specified.")
+        add_app_env_args(sp)
+        sp.add_argument('--all', action='store_true',
+                        help="Also remove all volumes and images")
+        sp.set_defaults(func=self.action_undeploy)
+        # apps
+        sp = sps.add_parser('apps', formatter_class=PositionalFirstHelpFormatter,
+                            help="List all applications (name and environment) configured on this node")
+        sp.add_argument('--verbose', action='store_true',
+                        help="Show status while listing")
+        sp.set_defaults(func=self.action_apps)
+        # start
+        sp = sps.add_parser('start', formatter_class=PositionalFirstHelpFormatter,
+                            help="Start the application specified."
+                            "\nThe application should already exist on this node.")
+        add_app_env_args(sp)
+        sp.set_defaults(func=self.action_start)
+        # stop
+        sp = sps.add_parser('stop', formatter_class=PositionalFirstHelpFormatter,
+                            help="Stop the application specified."
+                            "\nThe application should already exist on this node.")
+        add_app_env_args(sp)
+        sp.set_defaults(func=self.action_stop)
+        # restart
+        sp = sps.add_parser('restart', formatter_class=PositionalFirstHelpFormatter,
+                            help="Restart the application specified."
+                            "\nThe application should already exist on this node.")
+        add_app_env_args(sp)
+        sp.set_defaults(func=self.action_restart)
+        # status
+        sp = sps.add_parser('status', formatter_class=PositionalFirstHelpFormatter,
+                            help="Show the systemd status for the application specified."
+                            "\nThe application should already exist on this node.")
+        add_app_env_args(sp)
+        sp.set_defaults(func=self.action_status)
+        # logs
+        sp = sps.add_parser('logs', formatter_class=PositionalFirstHelpFormatter,
+                            help="Show the global logs (all services) for the application specified."
+                            "\nThe application should already exist on this node."
+                            "\nWhen a pager is used, quit with Ctrl-C.")
+        add_app_env_args(sp)
+        sp.add_argument('--nopager', action='store_false', dest='pager',
+                        help="Logs are output directly, without a pager")
+        sp.set_defaults(func=self.action_logs)
+        # adjusting helps
+        self._append_usage_to_subcommands(sps)
+        # parsing sys args
+        self.actions = parser.parse_args()
+
+    def run_action(self):
+        self._read_arguments()
+        try:
+            self._check()
+        except ValueError as e:
+            die(e)
+        try:
+            self.actions.func(self.actions)
+        except Exception as e:
+            die(e)
+
+    def action_dcas(self, args):
+        dcas = [f for f in self.dca_dir.iterdir() if f.is_file() and f.suffix == '.dca']
+        if args.check:
+            for f in dcas:
+                fsha = f.with_suffix('.dca.sha256')
+                if fsha.is_file():
+                    printflush(f"{f.name}: ", end='')
+                    try:
+                        verify_checksum(f)
+                        printflush("OK")
+                    except ValueError:
+                        printflush("FAILED")
+                else:
+                    printflush("MISSING .sha256")
+        else:
+            for f in dcas:
+                printflush(f.name)
+
+    def action_deploy(self, args):
+        dca = (self.dca_dir / args.dca_file).resolve()
+        if dca.parent != self.dca_dir or dca.suffix != '.dca' or not dca.is_file():
+            raise ValueError(f"{args.dca_file} is incorrect")
+        if not dca.with_suffix('.dca.sha256').is_file():
+            raise ValueError(f"{args.dca_file}.sha256 is missing")
+        printflush(f"Deploying {dca.name}…")
+        try:
+            verify_checksum(dca)
+            printflush(f"{dca.name}: 'OK'")
+        except ValueError:
+            raise ValueError(f"{dca.name}: FAILED")
+        with temp_dir() as tmpd:
+            with taropen(dca, 'r:*') as tar:
+                tar.extractall(path=tmpd)
+            metadata_file = tmpd / 'metadata'
+            compose_file = tmpd / 'context' / 'docker-compose.yml'
+            for f in (metadata_file, compose_file):
+                if not f.is_file():
+                    raise ValueError(f"Bad {dca.name}: missing {f.name}")
+            parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
+            with open(metadata_file) as f:
+                parser.read_file(chain(('[def]',), f), source=f.name)
+            metadata = dict(parser['def'])
+            app = metadata.get('app', None)
+            target_env = metadata.get('target_env', None)
+            version = int(metadata.get('version', '1'))
+            self._check_app_name_target_env(app, target_env)
+            default_hostname = self.capp_config['default_hostname']
+            vhost_suffix = f"{'' if target_env == 'prod' else '-' + target_env}.{default_hostname}"
+            target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
+            self._pre_deploy(app, target_env, version, compose_file, target_dir)
+            dc, svc_names, limits = self._check_compose(compose_file, version)
+            self._check_limits(limits)
+            self._load_images((tmpd / 'images').glob('*.tar.gz'))
+            if args.clean:
+                self._clean_volumes(target_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            self._copy_context(tmpd / 'context', target_dir)
+            vhostd_dir = Path('/var/docker-volumes/nginx-proxy/vhost.d')
+            for svc_name in svc_names:
+                base_vhost = metadata.get(f'{svc_name}_base_vhost', None)
+                if base_vhost:
+                    full_hostname = f'{base_vhost}{vhost_suffix}'
+                    for vhost in [x.split() for x in full_hostname.split(',')]:
+                        server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
+                        if server_nginx_config_file.is_file():
+                            copy(server_nginx_config_file, vhostd_dir / vhost)
+                        location_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-location'
+                        if location_nginx_config_file.is_file():
+                            copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
+        with open(target_dir / '.env', 'w') as f:
+            f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n")
+        with open(target_dir / '.version', 'w') as f:
+            f.write(f"{version}\n")
+        if 'networks' not in dc:
+            dc['networks'] = {}
+        dc['networks']['proxy'] = {
+            'external': True,
+            'name': 'proxy_network',
+        }
+        for svc in svc_names:
+            svc_def = dc['services'][svc]
+            base_vhost = metadata.get(f'{svc}_base_vhost', None)
+            if base_vhost:
+                if 'environment' not in svc_def:
+                    svc_def['environment'] = {}
+                if isinstance(svc_def['environment'], dict):
+                    svc_def['environment']['VIRTUAL_HOST'] = f'{base_vhost}{vhost_suffix}'
+                    svc_def['environment']['LETSENCRYPT_HOST'] = f'{base_vhost}{vhost_suffix}'
+                    svc_def['environment']['VIRTUAL_PORT'] = metadata.get(f'{svc}_vhost_port', '80')
+                else:  # list
+                    svc_def['environment'].append(f'VIRTUAL_HOST={base_vhost}{vhost_suffix}')
+                    svc_def['environment'].append(f'LETSENCRYPT_HOST={base_vhost}{vhost_suffix}')
+                    svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc}_vhost_port', '80')}")
+                if 'networks' not in svc_def:
+                    svc_def['networks'] = []
+                if isinstance(svc_def['networks'], dict):
+                    svc_def['networks']['proxy'] = {}
+                else:  # list
+                    svc_def['networks'].append('proxy')
+            svc_def['mem_limit'] = f'{limits.mem[svc]}B'
+            svc_def['mem_reservation'] = f'{limits.mem_avg[svc]}B'
+            svc_def['mem_swappiness'] = 10
+            svc_def['oom_score_adj'] = 500  # prefer to kill containers than system processes
+            # min = 1024 ÷ 4 (cpu = 1), avg = 1024 (cpu = 4), max 1024 × 4 (cpu = 16)
+            svc_def['cpu_shares'] = limits.cpu[svc] * 1024 // 4
+        with open(target_dir / 'docker-compose.yml', 'w') as f:
+            dump(dc, f)
+        deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
+        with open(deps_file, 'r+') as f:
+            deps = [l.strip() for l in f if not l.startswith(f'{app}/{target_env}:')]
+            deps.append(f'{app}/{target_env}:proxy')
+            f.seek(0)
+            f.truncate()
+            f.write('\n'.join(deps))
+            f.write('\n')
+        run(['sudo', 'compose-dirs', 'update'], check=True, text=True)
+        systemd_svc = self._get_systemd_service_name(app, target_env)
+        if args.start:
+            run(['sudo', 'systemctl', 'restart', systemd_svc], check=True, text=True)
+        elif run(['systemctl', 'is-active', systemd_svc], capture_output=True).returncode == 0:
+            run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
+        self._post_deploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
+
+    def _get_systemd_service_name(self, app, env=None):
+        full_name = f"{app}{'/' + env if env else ''}"
+        full_name_systemd = run(['systemd-escape', '--suffix', 'service', full_name], check=True, capture_output=True, text=True).stdout.strip()
+        tmpl_name = self.compose_dirs_config.get('tmpl_name', 'compose')
+        return f'{tmpl_name}@{full_name_systemd}'
+
+    def _check_app_name_target_env(self, app, target_env):
+        valid_app_name = r'[a-zA-Z][-_a-zA-Z0-9]+'
+        if not all((
+            app,
+            match(f'^{valid_app_name}$', app),
+        )):
+            raise ValueError(f"app '{app or ''}' should be a valid name: {valid_app_name}")
+        if not all((
+            target_env,
+            target_env in self.allowed_envs,
+        )):
+            raise ValueError(f"target environment '{target_env or ''}' should be a valid env: {', '.join(self.allowed_envs)}")
+
+    def _check_compose(self, compose_file, version):
+        if run(['docker-compose', '-f', str(compose_file), 'config', '-q'], capture_output=True).returncode:
+            raise ValueError(f'{compose_file.name} is incorrect')
+        svc_names = []
+        limits = namedtuple('ResLimits', 'mem mem_avg cpu')({}, {}, {})
+        with open(compose_file) as f:
+            dc = full_load(f)
+        for svc_name, svc_def in dc.get('services', {}).items():
+            svc_names.append(svc_name)
+            limits.mem[svc_name] = 300 * u.M if version > 1 else 1 * u.G
+            limits.mem_avg[svc_name] = 100 * u.M if version > 1 else 300 * u.M
+            limits.cpu[svc_name] = 4
+            if version > 1:
+                self._verify_compose_service(svc_name, svc_def)
+        if version > 1:
+            for vol_name, vol_def in dc.get('volumes', {}).items():
+                self._verify_compose_volume(vol_name, vol_def)
+            for net_name, net_def in dc.get('networks', {}).items():
+                self._verify_compose_network(net_name, net_def)
+            for res_name, res_def in dc.get('x-resources', {}).items():
+                self._verify_resources(res_name, res_def, limits)
+        return dc, svc_names, limits
+
+    def _verify_compose_service(self, name, definition):
+        for key in (definition or {}).keys():
+            if key not in (
+                'build',
+                'cap_drop',
+                'command',
+                'depends_on',
+                'entrypoint',
+                'env_file',
+                'environment',
+                'expose',
+                'extends',
+                'extra_hosts',
+                'group_add',
+                'healthcheck',
+                'image',
+                'init',
+                'labels',
+                'networks',
+                'pid',
+                'scale',
+                'stop_grace_period',
+                'stop_signal',
+                'sysctls',
+                'tmpfs',
+                'ulimits',
+                'volumes',
+                'volumes_from',
+                'restart',
+                'shm_size',
+                'tty',
+                'user',
+                'working_dir',
+            ):
+                raise ValueError(f"key {key}, defined for {name} is not allowed in services section")
+            if key == 'build':
+                build_def = definition[key]
+                if isinstance(build_def, dict):
+                    for subkey in build_def.keys():
+                        if subkey not in (
+                            'context',
+                            'dockerfile',
+                            'args',
+                            'cache_from',
+                            'extra_hosts',
+                            'labels',
+                            'shm_size',
+                            'target',
+                        ):
+                            raise ValueError(f"key {subkey}, defined for {name}.{key} is not allowed in services section")
+            elif key == 'extends':
+                for subkey in (definition[key] or {}).keys():
+                    if subkey not in (
+                        'file',
+                        'service',
+                    ):
+                        raise ValueError(f"key {subkey}, defined for {name}.{key} is not allowed in services section")
+            elif key == 'healthcheck':
+                for subkey in (definition[key] or {}).keys():
+                    if subkey not in (
+                        'test',
+                        'interval',
+                        'timeout',
+                        'retries',
+                        'start_period',
+                        'disable',
+                    ):
+                        raise ValueError(f"key {subkey}, defined for {name}.{key} is not allowed in services section")
+            elif key == 'pid':
+                if definition[key] == 'host':
+                    raise ValueError(f"key {key}, defined for {name} is not allowed to take the 'host' value in services section")
+            elif key == 'volumes':
+                volumes = definition[key]
+                for volume in volumes:
+                    if isinstance(volume, str):
+                        if ':' in volume and not match(r'[a-zA-Z]', volume) and not volume.startswith('./'):
+                            raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
+                    else:
+                        vol_src = volume.get('source', '')
+                        if vol_src and not match(r'[a-zA-Z]', vol_src) and not vol_src.startswith('./'):
+                            raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
+
+    def _verify_compose_volume(self, name, definition):
+        for key in (definition or {}).keys():
+            if key not in ('external', 'labels', 'name'):
+                raise ValueError(f"key {key}, defined for {name} is not allowed in volumes section")
+
+    def _verify_compose_network(self, name, definition):
+        for key in (definition or {}).keys():
+            if key not in ('external', 'internal', 'labels', 'name'):
+                raise ValueError(f"key {key}, defined for {name} is not allowed in networks section")
+
+    def _verify_resources(self, name, definition, limits):
+        for key in (definition or {}).keys():
+            if key not in ('memory', 'memory_avg', 'cpu'):
+                raise ValueError(f"key {key}, defined for {name} is not allowed in x-resources section")
+            elif key == 'cpu':
+                if not 1 <= definition[key] <= 16:
+                    raise ValueError(f"key {key}, defined for {name} should have a value between [1; 16], in x-resources section")
+                limits.cpu[name] = definition[key]
+            else:
+                if not any((
+                    definition[key].endswith('B'),
+                    definition[key].endswith('K'),
+                    definition[key].endswith('M'),
+                    definition[key].endswith('G'),
+                )):
+                    raise ValueError(f"key {key}, defined for {name} should have a unit value of B, K, M or G, in x-resources section")
+                if not search(r'^[0-9]+$', definition[key][:-1]):
+                    raise ValueError(f"key {key}, defined for {name} should have a valid postive integer value, in x-resources section")
+                value = self._to_bytes(definition[key])
+                if key == 'memory':
+                    limits.mem[name] = value
+                elif key == 'memory_avg':
+                    limits.mem_avg[name] = value
+
+    def _check_limits(self, limits):
+        max_mem_size = self.capp_config['max_mem_size']
+        for (name, limit), (_, limit_avg) in zip(sorted(limits.mem.items()), sorted(limits.mem_avg.items())):
+            if limit > max_mem_size:
+                raise ValueError(f"memory limit of {self._to_unit(limit)} exceeds max defined limit of {self._to_unit(max_mem_size)}")
+            if limit_avg > limit:
+                raise ValueError(f"memory average limit of {self._to_unit(limit_avg)} exceeds memory limit of {self._to_unit(limit)}")
+        for name, cpu in limits.cpu.items():
+            if not 1 <= cpu <= 16:
+                raise ValueError(f"cpu weight limit of {cpu} should be in [1; 16] range")
+
+    def _pre_deploy(self, app, target_env, version, compose_file, target_dir):
+        for hook_file in self._iter_hooks('deploy', 'pre'):
+            self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
+
+    def _post_deploy(self, app, target_env, version, compose_file, target_dir):
+        for hook_file in self._iter_hooks('deploy', 'post'):
+            self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
+
+    def _pre_undeploy(self, app, target_env, version, compose_file, target_dir):
+        for hook_file in self._iter_hooks('undeploy', 'pre'):
+            self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
+
+    def _post_undeploy(self, app, target_env, version, compose_file, target_dir):
+        for hook_file in self._iter_hooks('undeploy', 'post'):
+            self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
+
+    def _load_images(self, image_files):
+        printflush(end='')
+        for image_file in image_files:
+            run(f'zcat "{str(image_file)}" | docker image load', shell=True, check=True, text=True)
+        run(['docker', 'image', 'prune', '-f'], text=True)
+
+    def _clean_volumes(self, target_dir):
+        printflush(end='')
+        if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
+            run(['docker-compose', 'down', '-v'], cwd=target_dir, text=True)
+
+    def _copy_context(self, src_dir, dest_dir):
+        excludes = ('.env', 'docker-compose.yml')
+
+        def ignore_func(item):
+            return item.name in excludes
+        copy_tree(src_dir, dest_dir, ignored=ignore_func)
+
+    def action_undeploy(self, args):
+        app = args.app
+        target_env = args.env
+        self._check_app_name_target_env(app, target_env)
+        printflush(f"Undeploying {app}/{target_env}…")
+        target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
+        try:
+            with open(target_dir / '.version') as f:
+                version = int(f.read().strip())
+        except FileNotFoundError:
+            version = 1
+        self._pre_undeploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
+        systemd_svc = self._get_systemd_service_name(app, target_env)
+        run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
+        deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
+        with open(deps_file, 'r+') as f:
+            deps = [l.strip() for l in f if not l.startswith(f'{app}/{target_env}:')]
+            f.seek(0)
+            f.truncate()
+            f.write('\n'.join(deps))
+            f.write('\n')
+        run(['sudo', 'compose-dirs', 'update'], check=True, text=True)
+        if target_dir.is_dir():
+            with open(target_dir / 'docker-compose.yml') as f:
+                dc = full_load(f)
+            vhostd_dir = Path('/var/docker-volumes/nginx-proxy/vhost.d')
+            for svc in dc.get('services', {}).values():
+                environment = svc.get('environment', {})
+                vhost_str = environment.get('VIRTUAL_HOST', '') if isinstance(environment, dict) \
+                    else next(iter([e for e in environment if match(r'VIRTUAL_HOST=', e)]), '=').split('=', 1)[1]
+                if vhost_str:
+                    for vhost in [x.strip() for x in vhost_str.split(',')]:
+                        server_nginx_config_file = vhostd_dir / vhost
+                        if server_nginx_config_file.is_file():
+                            server_nginx_config_file.unlink()
+                        location_nginx_config_file = vhostd_dir / f'{vhost}_location'
+                        if location_nginx_config_file.is_file():
+                            location_nginx_config_file.unlink()
+            dc_down_args = '-v --rmi all' if args.all else '--rmi local'
+            run(f"docker-compose down {dc_down_args} 2>&1 | grep -v ^Network | grep -v '^Removing network'", shell=True, cwd=target_dir, text=True)
+            self._post_undeploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
+            rmtree(target_dir, ignore_errors=True)
+            try:
+                target_dir.parent.rmdir()
+            except OSError:
+                pass
+        else:
+            self._post_undeploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
+
+    def action_apps(self, args):
+        deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
+        with open(deps_file) as f:
+            deps = [l.strip() for l in f if search(r'/.+:', l)]
+            for dep in sorted(deps):
+                app, env = dep.split(':')[0].split('/')
+                printflush(f'{app} {env}')
+                if args.verbose:
+                    svc = self._get_systemd_service_name(app, env)
+                    raw_status = run(['systemctl', 'status', '--no-pager', svc], env={'SYSTEMD_COLORS': '1'}, capture_output=True, text=True).stdout
+                    status = ''.join([l.replace('Active: ', '') for l in raw_status.split('\n') if search(r'Active:', l)])
+                    printflush(status)
+
+    def action_start(self, args):
+        app = args.app
+        target_env = args.env
+        self._check_app_name_target_env(app, target_env)
+        svc = self._get_systemd_service_name(app, target_env)
+        execlp('sudo', 'sudo', 'systemctl', 'start', svc)
+
+    def action_stop(self, args):
+        app = args.app
+        target_env = args.env
+        self._check_app_name_target_env(app, target_env)
+        svc = self._get_systemd_service_name(app, target_env)
+        execlp('sudo', 'sudo', 'systemctl', 'stop', svc)
+
+    def action_restart(self, args):
+        app = args.app
+        target_env = args.env
+        self._check_app_name_target_env(app, target_env)
+        svc = self._get_systemd_service_name(app, target_env)
+        execlp('sudo', 'sudo', 'systemctl', 'restart', svc)
+
+    def action_status(self, args):
+        app = args.app
+        target_env = args.env
+        self._check_app_name_target_env(app, target_env)
+        svc = self._get_systemd_service_name(app, target_env)
+        execlp('systemctl', 'systemctl', 'status', '--no-pager', svc)
+
+    def action_logs(self, args):
+        app = args.app
+        target_env = args.env
+        self._check_app_name_target_env(app, target_env)
+        svc = self._get_systemd_service_name(app, target_env)
+        if args.pager:
+            execlp('journalctl', 'journalctl', '-feu', svc)
+        else:
+            execlp('journalctl', 'journalctl', '--no-pager', '-u', svc)
+
+
+if __name__ == '__main__':
+    check_python()
+    capp = CApp()
+    capp.run_action()

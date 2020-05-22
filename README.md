@@ -27,7 +27,6 @@ Configuration
 -------------
 
 Users allowed to upload [*DCA*](https://github.com/jrd/dca_format) files should have their public keys in `/etc/dca-authorized-keys`.
-For more information see the [dca readme](dca/README.md).
 
 Users allowed to act on deployments should have their public keys in `/etc/deploy-authorized-keys`.
 You don't have to do anything after modifying this file for the content to be taken into account.
@@ -95,7 +94,7 @@ Better use the `capp start|stop` commands or `sudo systemctl start|stop` command
 License and authors
 -------------------
 
-[MIT](https://choosealicense.com/licenses/mit/)
+[MIT](./LICENSE)
 
 Authors:
 

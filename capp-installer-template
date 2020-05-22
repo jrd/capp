@@ -1,10 +1,12 @@
 #!/bin/bash
 COMPOSE_SYSTEMD_VER=1.2.0
 set -e
-if [ -z "$2" ]; then
-    echo "$0 default_hostname default_email [nohttps]" >&2
+def_cont_mem='10G'
+usage() {
+    echo "$0 default_hostname default_email [container_max_memory_size=$def_cont_mem] [nohttps]" >&2
+    echo "  container_max_memory_size should be expressed with M or G units" >&2
     exit 1
-fi
+}
 if [ $(id -u) -ne 0 ]; then
     echo "Root required" >&2
     exit 1
@@ -18,8 +20,36 @@ done
 me=$(readlink -f "$0")
 offset=$(($(sed -rn '/#{10}/=' "$me") + 1))
 dh="$1"
-de="$2"
-[ "$3" = "nohttps" ] && nohttps=1 || nohttps=0
+[ -n "$dh" ] && shift || usage
+de="$1"
+[ -n "$dh" ] && shift || usage
+cont_mem=
+nohttps=0
+while [ -n "$1" ]; do
+    p="$1"
+    shift
+    case "$p" in
+        nohttps)
+            nohttps=1
+            ;;
+        *M|*G)
+            if [ -z "$cont_mem" ]; then
+                cont_mem="$p"
+            else
+                usage
+            fi
+            ;;
+        *)
+            usage
+            ;;
+    esac
+done
+[ -n "$cont_mem" ] || cont_mem=$def_cont_mem
+cat > /etc/capp.conf <<EOF
+max_mem_size=${cont_mem}
+default_hostname=${dh}
+EOF
+mkdir -p /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy}
 tmpdir=$(mktemp -d)
 cd $tmpdir
 curl -Ls https://github.com/jrd/compose-systemd/archive/v${COMPOSE_SYSTEMD_VER}.tar.gz | tar xzf -
@@ -29,6 +59,9 @@ cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs /usr/local/bin/
 ln -sf $(which docker-compose) /usr/local/bin/dc
 mkdir -p /var/docker-volumes/nginx-proxy/{vhost.d,certs} /etc/compose /home/deploy/dca
 id -u compose >/dev/null 2>&1 || useradd --home-dir /etc/compose --no-create-home --user-group --shell /usr/sbin/nologin -c "Compose" -l compose
+chown :compose /var/docker-volumes/nginx-proxy/vhost.d
+chmod g+w /var/docker-volumes/nginx-proxy/vhost.d
+[ -f /etc/compose/dca/users-keys ] && cp /etc/compose/dca/users-keys dca/
 cp -r proxy dca /etc/compose/
 if [ "$nohttps" -eq 1 ]; then
     # delete the letsencrypt service
@@ -39,13 +72,14 @@ if [ "$nohttps" -eq 1 ]; then
     sed -ri '/Env\.HTTPS_METHOD/s/redirect/nohttps/' /etc/compose/proxy/nginx.tmpl
 fi
 sed -ri "s/dca:1000:1000/dca:$(id -u compose):$(id -g compose)/" /etc/compose/dca/docker-compose.yml
-cp capp /usr/local/bin
+mkdir -p /usr/local/bin
+cp capp verify_dca.py /usr/local/bin/
 chown compose: /usr/local/bin/capp
 cat > /etc/compose/proxy/.env <<EOF
 DEFAULT_HOST=$dh
 DEFAULT_EMAIL=$de
 EOF
-if [ -e /etc/compose/compose.deps ]; then
+if [ -f /etc/compose/compose.deps ]; then
     for svc in proxy dca; do
         grep -q "^$svc:" /etc/compose/compose.deps || echo "$svc:" >> /etc/compose/compose.deps
     done

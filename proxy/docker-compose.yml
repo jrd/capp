@@ -14,7 +14,8 @@ services:
       - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
   docker-gen:
-    #image: jwilder/docker-gen:0.7.3 until a new version with bugfixes is released
+    #image: jwilder/docker-gen:0.7.3 until a new version with bugfixes is released (https://github.com/jwilder/docker-gen)
+    # coderedcorp seems to maintain a more up-to-date version (https://github.com/coderedcorp/docker-gen)
     image: coderedcorp/docker-gen:latest
     container_name: docker-gen
     entrypoint: ["/usr/local/bin/docker-gen-wrapper"]
@@ -31,7 +32,7 @@ services:
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
       - nginx-conf:/etc/nginx/conf.d:rw
   letsencrypt:
-    image: jrcs/letsencrypt-nginx-proxy-companion:v1.12
+    image: jrcs/letsencrypt-nginx-proxy-companion:v1.12.1
     container_name: le-gen
     environment:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"
