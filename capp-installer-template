@@ -119,7 +119,8 @@ cat > /etc/sudoers.d/compose <<EOF
 # Allow members of compose group to execute compose-dirs command
 Cmnd_Alias COMPOSE_DIRS = /usr/local/bin/compose-dirs
 Cmnd_Alias COMPOSE_SVC = /usr/bin/systemctl start compose@*, /usr/bin/systemctl stop compose@*, /usr/bin/systemctl restart compose@*
-%compose   ALL= NOPASSWD: COMPOSE_DIRS, COMPOSE_SVC
+Cmnd_Alias CAPP_HOOKS = /etc/capp/hooks.d/pre_deploy/*, /etc/capp/hooks.d/post_deploy/*, /etc/capp/hooks.d/pre_undeploy/*, /etc/capp/hooks.d/post_undeploy/*, 
+%compose   ALL= NOPASSWD: COMPOSE_DIRS, COMPOSE_SVC, CAPP_HOOKS
 EOF
 cat > /etc/sudoers.d/deploy <<EOF
 # Allow members of deploy group to execute capp command

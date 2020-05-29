@@ -173,7 +173,7 @@ class CApp:
         return sorted(hooks)
 
     def _run_hook(self, hook_file, app, target_env, version, compose_file, target_dir):
-        run([hook_file, app, target_env, version, compose_file, target_dir], stdin=0, check=True, text=True)
+        run(['/usr/bin/sudo', hook_file, app, target_env, str(version), str(compose_file), str(target_dir)], stdin=0, check=True, text=True)
 
     def _to_bytes(self, value_unit):
         if not value_unit:
