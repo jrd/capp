@@ -369,10 +369,10 @@ class CApp:
                     for vhost in [x.split() for x in full_hostname.split(',')]:
                         server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
                         if server_nginx_config_file.is_file():
-                            copy(server_nginx_config_file, vhostd_dir / vhost)
+                            copy(server_nginx_config_file, vhostd_dir / vhost[0])
                         location_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-location'
                         if location_nginx_config_file.is_file():
-                            copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
+                            copy(location_nginx_config_file, vhostd_dir / f'{vhost[0]}_location')
         with open(target_dir / '.env', 'w') as f:
             f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n")
         with open(target_dir / '.version', 'w') as f:
