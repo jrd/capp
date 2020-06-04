@@ -10,6 +10,7 @@ from itertools import chain
 from os import (
     execlp,
     getuid,
+    environ,
 )
 from pathlib import Path
 from pwd import getpwuid
@@ -32,7 +33,7 @@ from stat import (
     S_IRUSR,
     S_IXUSR,
 )
-from subprocess import run
+from subprocess import run, CompletedProcess
 from sys import (
     exit,
     stderr,
@@ -49,6 +50,9 @@ from yaml import (
 from verify_dca import verify_checksum
 
 
+__version__ = (2, 1, 0)
+
+
 def printflush(*args, **kwargs):
     kwargs.pop('flush', None)
     kwargs['flush'] = True
@@ -61,11 +65,11 @@ def error(msg, code=None):
         exit(code)
 
 
-def die(msg):
-    if isinstance(msg, Exception):
+def die(msg, error_code=1):
+    if isinstance(msg, Exception) and environ.get('CAPP_DEBUG', None):
         from traceback import print_exc
         print_exc()
-    error(str(msg), 1)
+    error(str(msg), error_code)
 
 
 def check_python():
@@ -125,87 +129,46 @@ u = namedtuple('Unit', 'B K M G')(1, 1024, 1024 * 1024, 1024 * 1024 * 1024)
 
 class CApp:
     def __init__(self):
-        self.config = None
+        global run
+
         self.allowed_envs = ('dev', 'integ', 'staging', 'demo', 'prod')
-        self.dca_dir = Path('/home/deploy/dca')
+        self.config = None
+        self.dry_run = environ.get('CAPP_DRY_RUN', None) is not None
+        if self.dry_run:
+            Path('/tmp/capp').mkdir(parents=True, exist_ok=True)
+            self.compose_dirs_conf_file = Path('/tmp/capp/compose-dirs.conf')
+            with open(self.compose_dirs_conf_file, 'w') as f:
+                f.write(f"compose_user={getpwuid(getuid()).pw_name}\ncompose_dir=/tmp/capp/compose\ndeps_file=deps\ntmpl_name=compose\n")
+            Path('/tmp/capp/compose').mkdir(parents=True, exist_ok=True)
+            Path('/tmp/capp/compose/deps').touch()
+            self.capp_conf_file = Path('/tmp/capp/capp.conf')
+            with open(self.capp_conf_file, 'w') as f:
+                f.write("default_hostname=example.com\nmax_mem_size=10G\n")
+            self.hooks_root_dir = Path('/tmp/capp/hooks.d')
+            for a in ('deploy', 'undeploy'):
+                for m in ('pre', 'post'):
+                    (self.hooks_root_dir / f'{m}_{a}').mkdir(parents=True, exist_ok=True)
+                    f = self.hooks_root_dir / f'{m}_{a}' / 'hook'
+                    f.touch(mode=0o744)
+            self.dca_dir = Path('/tmp/capp/dca')
+            self.dca_dir.mkdir(exist_ok=True)
+            real_run = run
 
-    def _check(self):
-        self.compose_dirs_config = self._read_compose_dirs_config()
-        self.capp_config = self._read_capp_config()
-        self._check_user()
-
-    def _read_compose_dirs_config(self):
-        if not Path('/etc/compose-dirs.conf').is_file():
-            raise ValueError(
-                "This script relies on compose-systemd: https://github.com/jrd/compose-systemd"
-                "\n/etc/compose-dirs.conf file should exist"
-            )
-        parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
-        with open('/etc/compose-dirs.conf') as f:
-            parser.read_file(chain(('[def]',), f), source=f.name)
-        return dict(parser['def'])
-
-    def _read_capp_config(self):
-        if not Path('/etc/capp.conf').is_file():
-            raise ValueError("/etc/capp.conf file should exist")
-        parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
-        with open('/etc/capp.conf') as f:
-            parser.read_file(chain(('[def]',), f), source=f.name)
-        cfg = dict(parser['def'])
-        cfg['max_mem_size'] = self._to_bytes(cfg.get('max_mem_size', '10240M'))
-        cfg['default_hostname'] = cfg.get('default_hostname', getfqdn())
-        return cfg
-
-    def _iter_hooks(self, action, step):
-        """
-        action could be deploy or undeploy
-        step could be pre or post
-        """
-        hooks_dir = Path('/etc/capp/hooks.d') / f'{step}_{action}'
-        hooks = []
-        if hooks_dir.is_dir():
-            for f in hooks_dir.iterdir():
-                if f.is_file():
-                    mode = f.lstat().st_mode
-                    # read an execute rights
-                    if mode & S_IRUSR != 0 and mode & S_IXUSR != 0:
-                        hooks.append(f)
-        return sorted(hooks)
-
-    def _run_hook(self, hook_file, app, target_env, version, compose_file, target_dir):
-        run(['/usr/bin/sudo', hook_file, app, target_env, str(version), str(compose_file), str(target_dir)], stdin=0, check=True, text=True)
-
-    def _to_bytes(self, value_unit):
-        if not value_unit:
-            return None
-        elif value_unit.endswith('B'):
-            return int(round(float(value_unit[:-1]) * u.B))
-        elif value_unit.endswith('K'):
-            return int(round(float(value_unit[:-1]) * u.K))
-        elif value_unit.endswith('M'):
-            return int(round(float(value_unit[:-1]) * u.M))
-        elif value_unit.endswith('G'):
-            return int(round(float(value_unit[:-1]) * u.G))
+            def mock_run(*args, **kwargs):
+                if environ.get('CAPP_DEBUG', None):
+                    print(f"run with args={args}, kwargs={kwargs}")
+                if len(args[0]) > 0 and args[0][0] == 'systemd-escape':
+                    return real_run(*args, **kwargs)
+                elif len(args[0]) > 2 and args[0][0:1] == ['systemctl', 'status']:
+                    return CompletedProcess((), 0, stdout='Active: active (running)')
+                else:
+                    return CompletedProcess((), 0)
+            run = mock_run
         else:
-            return None
-
-    def _to_unit(self, value_bytes):
-        if not value_bytes:
-            return None
-        elif value_bytes >= u.G:
-            return f'{value_bytes / u.G:.2f}G'.replace('.00G', 'G').replace('0G', 'G')
-        elif value_bytes >= u.M:
-            return f'{value_bytes / u.M:.2f}M'.replace('.00M', 'M').replace('0M', 'M')
-        elif value_bytes >= u.K:
-            return f'{value_bytes / u.K:.2f}K'.replace('.00K', 'K').replace('0K', 'K')
-        else:
-            return value_bytes
-
-    def _check_user(self):
-        current_user_name = getpwuid(getuid()).pw_name
-        expected_user_name = self.compose_dirs_config.get('compose_user', '')
-        if current_user_name != expected_user_name:
-            raise ValueError(f"This script should be run as {expected_user_name}")
+            self.compose_dirs_conf_file = Path('/etc/compose-dirs.conf')
+            self.capp_conf_file = Path('/etc/capp.conf')
+            self.hooks_root_dir = Path('/etc/capp/hooks.d')
+            self.dca_dir = Path('/home/deploy/dca')
 
     def _append_usage_to_subcommands(self, sps):
         for name, sp in sps._name_parser_map.items():
@@ -214,8 +177,10 @@ class CApp:
                 usage = sub(rf'.+ {name} ', '  ', sp.format_usage())
                 ca.help += f'\n{usage}'
 
-    def _read_arguments(self):
-        parser = ArgumentParser(formatter_class=PositionalFirstHelpFormatter)
+    def read_arguments(self):
+        perms_warning = "Some actions may require specific rights.\nThose are shown in each command help.\nRights are grouped in roles."
+        parser = ArgumentParser(formatter_class=PositionalFirstHelpFormatter, epilog=perms_warning)
+        parser.add_argument('-V', '--version', action='version', version='.'.join(str(p) for p in __version__))
         sps = parser.add_subparsers(title='actions', metavar='ACTION', required=True,
                                     description="Use ACTION -h|--help to get full help on any action",
                                     help="One of the following action is required\n ")
@@ -294,7 +259,7 @@ class CApp:
         self.actions = parser.parse_args()
 
     def run_action(self):
-        self._read_arguments()
+        self.read_arguments()
         try:
             self._check()
         except ValueError as e:
@@ -303,6 +268,84 @@ class CApp:
             self.actions.func(self.actions)
         except Exception as e:
             die(e)
+
+    def _check(self):
+        self.compose_dirs_config = self._read_compose_dirs_config()
+        self.capp_config = self._read_capp_config()
+        self._check_user()
+
+    def _read_compose_dirs_config(self):
+        if not self.compose_dirs_conf_file.is_file():
+            raise ValueError(
+                "This script relies on compose-systemd: https://github.com/jrd/compose-systemd"
+                f"\n{self.compose_dirs_conf_file} file should exist"
+            )
+        parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
+        with open(self.compose_dirs_conf_file) as f:
+            parser.read_file(chain(('[def]',), f), source=f.name)
+        return dict(parser['def'])
+
+    def _read_capp_config(self):
+        if not self.capp_conf_file.is_file():
+            raise ValueError(f"{self.capp_conf_file} file should exist")
+        parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
+        with open(self.capp_conf_file) as f:
+            parser.read_file(chain(('[def]',), f), source=f.name)
+        cfg = dict(parser['def'])
+        cfg['max_mem_size'] = self._to_bytes(cfg.get('max_mem_size', '10240M'))
+        cfg['default_hostname'] = cfg.get('default_hostname', getfqdn())
+        return cfg
+
+    def _check_user(self):
+        current_user_name = getpwuid(getuid()).pw_name
+        expected_user_name = self.compose_dirs_config.get('compose_user', '')
+        if current_user_name != expected_user_name:
+            raise ValueError(f"This script should be run as {expected_user_name}")
+
+    def _iter_hooks(self, action, step):
+        """
+        action could be deploy or undeploy
+        step could be pre or post
+        """
+        hooks_dir = self.hooks_root_dir / f'{step}_{action}'
+        hooks = []
+        if hooks_dir.is_dir():
+            for f in hooks_dir.iterdir():
+                if f.is_file():
+                    mode = f.lstat().st_mode
+                    # read an execute rights
+                    if mode & S_IRUSR != 0 and mode & S_IXUSR != 0:
+                        hooks.append(f)
+        return sorted(hooks)
+
+    def _run_hook(self, hook_file, app, target_env, version, compose_file, target_dir):
+        run(['/usr/bin/sudo', hook_file, app, target_env, str(version), str(compose_file), str(target_dir)], stdin=0, check=True, text=True)
+
+    def _to_bytes(self, value_unit):
+        if not value_unit:
+            return None
+        elif value_unit.endswith('B'):
+            return int(round(float(value_unit[:-1]) * u.B))
+        elif value_unit.endswith('K'):
+            return int(round(float(value_unit[:-1]) * u.K))
+        elif value_unit.endswith('M'):
+            return int(round(float(value_unit[:-1]) * u.M))
+        elif value_unit.endswith('G'):
+            return int(round(float(value_unit[:-1]) * u.G))
+        else:
+            return None
+
+    def _to_unit(self, value_bytes):
+        if not value_bytes:
+            return None
+        elif value_bytes >= u.G:
+            return f'{value_bytes / u.G:.2f}G'.replace('.00G', 'G').replace('0G', 'G')
+        elif value_bytes >= u.M:
+            return f'{value_bytes / u.M:.2f}M'.replace('.00M', 'M').replace('0M', 'M')
+        elif value_bytes >= u.K:
+            return f'{value_bytes / u.K:.2f}K'.replace('.00K', 'K').replace('0K', 'K')
+        else:
+            return value_bytes
 
     def action_dcas(self, args):
         dcas = [f for f in self.dca_dir.iterdir() if f.is_file() and f.suffix == '.dca']
