@@ -49,7 +49,7 @@ cat > /etc/capp.conf <<EOF
 max_mem_size=${cont_mem}
 default_hostname=${dh}
 EOF
-mkdir -p /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy}
+mkdir -p /etc/capp/users /etc/capp/rights /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy}
 tmpdir=$(mktemp -d)
 cd $tmpdir
 curl -Ls https://github.com/jrd/compose-systemd/archive/v${COMPOSE_SYSTEMD_VER}.tar.gz | tar xzf -
@@ -112,6 +112,9 @@ Match User deploy
 EOF
 touch /etc/deploy-authorized-keys
 ln -sf /etc/compose/dca/users-keys /etc/dca-authorized-keys
+touch /var/log/capp.log
+chown compose: /etc/deploy-authorized-keys /etc/dca-authorized-keys /etc/compose/dca/users-keys /var/log/capp.log
+chmod g+w: /etc/deploy-authorized-keys /etc/dca-authorized-keys /etc/compose/dca/users-keys /var/log/capp.log
 groups compose | grep -q '\<docker\>' || usermod -a -G docker compose
 groups compose | grep -q '\<systemd-journal\>' || usermod -a -G systemd-journal compose
 groups compose | grep -q '\<deploy\>' || usermod -a -G deploy compose

@@ -6,11 +6,13 @@ from argparse import (
 from collections import namedtuple
 from configparser import ConfigParser
 from contextlib import contextmanager
+from datetime import datetime
+from enum import Enum
 from itertools import chain
 from os import (
+    environ,
     execlp,
     getuid,
-    environ,
 )
 from pathlib import Path
 from pwd import getpwuid
@@ -33,7 +35,10 @@ from stat import (
     S_IRUSR,
     S_IXUSR,
 )
-from subprocess import run, CompletedProcess
+from subprocess import (
+    CompletedProcess,
+    run,
+)
 from sys import (
     exit,
     stderr,
@@ -49,8 +54,7 @@ from yaml import (
 
 from verify_dca import verify_checksum
 
-
-__version__ = (2, 1, 0)
+__version__ = (2, 2, 0)
 
 
 def printflush(*args, **kwargs):
@@ -124,14 +128,32 @@ def copy_tree(src, dst, ignored=None):
             copy(item_src, item_dst)
 
 
-u = namedtuple('Unit', 'B K M G')(1, 1024, 1024 * 1024, 1024 * 1024 * 1024)
+class EnumNames(Enum):
+    @classmethod
+    def names(cls):
+        return cls.__members__.keys()
+
+
+class Unit(Enum):
+    B = 1
+    K = 1024
+    M = 1024 * 1024
+    G = 1024 * 1024 * 1024
+
+
+Env = EnumNames('Env', ('dev', 'integ', 'staging', 'demo', 'prod'))
+Right = EnumNames('Right', (
+    'DCA_READ', 'DCA_WRITE', 'APP_LIST',
+    'DEPLOY', 'START', 'STOP', 'STATUS', 'LOGS',
+    'USER_LIST', 'USER_ADD', 'USER_CHANGE', 'USER_DELETE',
+    'RIGHT_LIST', 'RIGHT_ADD', 'RIGHT_DELETE',
+))
 
 
 class CApp:
     def __init__(self):
         global run
 
-        self.allowed_envs = ('dev', 'integ', 'staging', 'demo', 'prod')
         self.config = None
         self.dry_run = environ.get('CAPP_DRY_RUN', None) is not None
         if self.dry_run:
@@ -150,14 +172,26 @@ class CApp:
                     (self.hooks_root_dir / f'{m}_{a}').mkdir(parents=True, exist_ok=True)
                     f = self.hooks_root_dir / f'{m}_{a}' / 'hook'
                     f.touch(mode=0o744)
+            self.users_dir = Path('/tmp/capp/users')
+            self.users_dir.mkdir(exist_ok=True)
+            self.rights_dir = Path('/tmp/capp/rights')
+            self.rights_dir.mkdir(exist_ok=True)
             self.dca_dir = Path('/tmp/capp/dca')
             self.dca_dir.mkdir(exist_ok=True)
+            self.dca_keys = Path('/tmp/capp/dca-authorized-keys')
+            self.dca_keys.touch()
+            self.deploy_keys = Path('/tmp/capp/deploy-authorized-keys')
+            self.deploy_keys.touch()
+            self.log_file = Path('/tmp/capp/capp.log')
+            self.log_file.touch()
             real_run = run
 
             def mock_run(*args, **kwargs):
                 if environ.get('CAPP_DEBUG', None):
                     print(f"run with args={args}, kwargs={kwargs}")
                 if len(args[0]) > 0 and args[0][0] == 'systemd-escape':
+                    return real_run(*args, **kwargs)
+                elif len(args[0]) > 0 and args[0][0] == 'ssh-keygen':
                     return real_run(*args, **kwargs)
                 elif len(args[0]) > 2 and args[0][0:1] == ['systemctl', 'status']:
                     return CompletedProcess((), 0, stdout='Active: active (running)')
@@ -168,7 +202,12 @@ class CApp:
             self.compose_dirs_conf_file = Path('/etc/compose-dirs.conf')
             self.capp_conf_file = Path('/etc/capp.conf')
             self.hooks_root_dir = Path('/etc/capp/hooks.d')
+            self.users_dir = Path('/etc/capp/users')
+            self.rights_dir = Path('/etc/capp/rights')
             self.dca_dir = Path('/home/deploy/dca')
+            self.dca_keys = Path('/etc/dca-authorized-keys')
+            self.deploy_keys = Path('/etc/deploy-authorized-keys')
+            self.log_file = Path('/var/log/capp.log')
 
     def _append_usage_to_subcommands(self, sps):
         for name, sp in sps._name_parser_map.items():
@@ -185,15 +224,27 @@ class CApp:
                                     description="Use ACTION -h|--help to get full help on any action",
                                     help="One of the following action is required\n ")
         # dcas
-        sp = sps.add_parser('dcas', formatter_class=PositionalFirstHelpFormatter,
-                            help="List all Docker Compose Archives (DCAs) that can be deployed.")
+        descr = "List all Docker Compose Archives (DCAs) that can be deployed."
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.DCA_READ.name}"
+        )
+        sp = sps.add_parser('dcas', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         sp.add_argument('--check', action='store_true',
                         help="verify each archive checksum")
         sp.set_defaults(func=self.action_dcas)
         # deploy
-        sp = sps.add_parser('deploy', formatter_class=PositionalFirstHelpFormatter,
-                            help="Deploy the specified DCA file,"
-                            "\noverwriting any existing application with the same name and environment.")
+        descr = (
+            "Deploy the specified DCA file,"
+            "\noverwriting any existing application with the same name and environment."
+        )
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.DCA_READ.name}"
+            f"\n- {Right.DEPLOY.name} with env and app regexes matching the environment name and app name accordingly"
+        )
+        sp = sps.add_parser('deploy', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        sp.description = descr
         sp.add_argument('dca_file', metavar='DCA_FILE',
                         help="DCA file as listed by the 'dcas' command")
         sp.add_argument('--clean', action='store_true',
@@ -205,55 +256,179 @@ class CApp:
         # app env shortcut func
         def add_app_env_args(sp):
             sp.add_argument('app', metavar='APP_NAME', help="Application name")
-            sp.add_argument('env', metavar='ENV', help=f"Environment name, one of {', '.join(self.allowed_envs)}")
+            sp.add_argument('env', metavar='ENV', help=f"Environment name, one of {', '.join(env.name for env in Env)}")
         # undeploy
-        sp = sps.add_parser('undeploy', formatter_class=PositionalFirstHelpFormatter,
-                            help="Undeploy the specified application by first stopping it."
-                            "\nNo data removed unless all is specified.")
+        descr = (
+            "Undeploy the specified application by first stopping it."
+            "\nNo data removed unless all is specified."
+        )
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.DEPLOY.name} with env and app regexes matching the environment name and app name accordingly"
+        )
+        sp = sps.add_parser('undeploy', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         add_app_env_args(sp)
         sp.add_argument('--all', action='store_true',
                         help="Also remove all volumes and images")
         sp.set_defaults(func=self.action_undeploy)
         # apps
-        sp = sps.add_parser('apps', formatter_class=PositionalFirstHelpFormatter,
-                            help="List all applications (name and environment) configured on this node")
+        descr = "List all applications (name and environment) configured on this node"
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.APP_LIST.name}"
+        )
+        sp = sps.add_parser('apps', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         sp.add_argument('--verbose', action='store_true',
                         help="Show status while listing")
         sp.set_defaults(func=self.action_apps)
         # start
-        sp = sps.add_parser('start', formatter_class=PositionalFirstHelpFormatter,
-                            help="Start the application specified."
-                            "\nThe application should already exist on this node.")
+        descr = (
+            "Start the application specified."
+            "\nThe application should already exist on this node."
+        )
+        epilog = "Required rights: APP_START, START_{env} and START_APPS regex list matching the app name"
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.START.name} with env and app regexes matching the environment name and app name accordingly"
+        )
+        sp = sps.add_parser('start', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         add_app_env_args(sp)
         sp.set_defaults(func=self.action_start)
         # stop
-        sp = sps.add_parser('stop', formatter_class=PositionalFirstHelpFormatter,
-                            help="Stop the application specified."
-                            "\nThe application should already exist on this node.")
+        descr = (
+            "Stop the application specified."
+            "\nThe application should already exist on this node."
+        )
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.STOP.name} with env and app regexes matching the environment name and app name accordingly"
+        )
+        sp = sps.add_parser('stop', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         add_app_env_args(sp)
         sp.set_defaults(func=self.action_stop)
         # restart
-        sp = sps.add_parser('restart', formatter_class=PositionalFirstHelpFormatter,
-                            help="Restart the application specified."
-                            "\nThe application should already exist on this node.")
+        descr = (
+            "Restart the application specified."
+            "\nThe application should already exist on this node."
+        )
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.START.name} with env and app regexes matching the environment name and app name accordingly"
+            f"\n- {Right.STOP.name} with env and app regexes matching the environment name and app name accordingly"
+        )
+        sp = sps.add_parser('restart', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         add_app_env_args(sp)
         sp.set_defaults(func=self.action_restart)
         # status
-        sp = sps.add_parser('status', formatter_class=PositionalFirstHelpFormatter,
-                            help="Show the systemd status for the application specified."
-                            "\nThe application should already exist on this node.")
+        descr = (
+            "Show the systemd status for the application specified."
+            "\nThe application should already exist on this node."
+        )
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.STATUS.name} with env and app regexes matching the environment name and app name accordingly"
+        )
+        sp = sps.add_parser('status', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         add_app_env_args(sp)
         sp.set_defaults(func=self.action_status)
         # logs
-        sp = sps.add_parser('logs', formatter_class=PositionalFirstHelpFormatter,
-                            help="Show the global logs (all services) for the application specified."
-                            "\nThe application should already exist on this node."
-                            "\nWhen a pager is used, quit with Ctrl-C.")
+        descr = (
+            "Show the global logs (all services) for the application specified."
+            "\nThe application should already exist on this node."
+            "\nWhen a pager is used, quit with Ctrl-C."
+        )
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.LOGS.name} with env and app regexes matching the environment name and app name accordingly"
+        )
+        sp = sps.add_parser('logs', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         add_app_env_args(sp)
         sp.add_argument('--nopager', action='store_false', dest='pager',
                         help="Logs are output directly, without a pager")
         sp.set_defaults(func=self.action_logs)
+        # users
+        descr = "User accounts management commands."
+        sp = sps.add_parser('users', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr)
+        usps = sp.add_subparsers(title='actions', metavar='ACTION', required=True,
+                                 description="Use ACTION -h|--help to get full help on any action",
+                                 help="One of the following action is required\n ")
+        descr = "List user account names and fingerprints."
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.USER_LIST.name}"
+        )
+        rsp = usps.add_parser('list', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.set_defaults(func=self.action_list_users)
+        descr = "Add a user account."
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.USER_ADD.name}"
+        )
+        rsp = usps.add_parser('add', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('user', metavar='USER', help="User account name")
+        rsp.add_argument('pkey', metavar='PUBLIC KEY', help="user public key")
+        rsp.set_defaults(func=self.action_add_user)
+        descr = "Change the public key of a user account."
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.USER_CHANGE.name} when changing another user"
+        )
+        rsp = usps.add_parser('change', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('user', metavar='USER', help="User account name")
+        rsp.add_argument('pkey', metavar='PUBLIC KEY', help="new user public key")
+        rsp.set_defaults(func=self.action_change_pkey)
+        descr = "Delete a user account."
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.USER_DELETE.name}"
+        )
+        rsp = usps.add_parser('delete', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('user', metavar='USER', help="User account name")
+        rsp.set_defaults(func=self.action_delete_user)
+        # rights
+        descr = "Rights management commands."
+        sp = sps.add_parser('rights', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr)
+        rsps = sp.add_subparsers(title='actions', metavar='ACTION', required=True,
+                                 description="Use ACTION -h|--help to get full help on any action",
+                                 help="One of the following action is required\n ")
+        descr = (
+            "List the rights granted to you or the specified user account."
+            "\nIf you specify an application and environment, you get the rights specific to it."
+        )
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.RIGHT_LIST.name} when listing for another user"
+        )
+        rsp = rsps.add_parser('list', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('--app', nargs='?', const=None, default=None, dest='app', metavar='APP_NAME', help="Application name")
+        rsp.add_argument('--env', nargs='?', const=None, default=None, dest='env', metavar='ENV', help=f"Environment name, one of {', '.join(env.name for env in Env)}")
+        rsp.add_argument('--user', nargs='?', const=None, default=None, dest='user', metavar='USER', help=f"User account name. Default to {self.get_ssh_user()}")
+        rsp.add_argument('-v', '--verbose', action='store_true', help="Output all right names and regex. env and app are ignored.")
+        rsp.set_defaults(func=self.action_list_rights)
+        descr = "Add some righs to a user account."
+        epilog = (
+            "Rights should be defined like this: RIGHT,ENV_REGEX,APP_REGEX or just RIGHT"
+            f"\nValid right names are: {' '.join(sorted(Right.names()))}"
+            "\n\nRequired rights:"
+            f"\n- {Right.RIGHT_ADD.name}"
+        )
+        rsp = rsps.add_parser('add', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('user', metavar='USER', help="User account name")
+        rsp.add_argument('rights', nargs='+', metavar='RIGHT,ENV_REGEX,APP_REGEX', help="right name, environment regex, app regex.")
+        rsp.set_defaults(func=self.action_add_rights)
+        descr = "Delete some righs from a user account."
+        epilog = (
+            f"Valid right names are: {' '.join(sorted(Right.names()))}"
+            "\n\nRequired rights:"
+            f"\n- {Right.RIGHT_DELETE.name}"
+        )
+        rsp = rsps.add_parser('delete', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('user', metavar='USER', help="User account name")
+        rsp.add_argument('rights', nargs='+', metavar='RIGHT', help="A right name")
+        rsp.set_defaults(func=self.action_delete_rights)
         # adjusting helps
+        self._append_usage_to_subcommands(usps)
+        self._append_usage_to_subcommands(rsps)
         self._append_usage_to_subcommands(sps)
         # parsing sys args
         self.actions = parser.parse_args()
@@ -266,6 +441,8 @@ class CApp:
             die(e)
         try:
             self.actions.func(self.actions)
+        except PermissionError as e:
+            die(str(e), 2)
         except Exception as e:
             die(e)
 
@@ -324,30 +501,60 @@ class CApp:
     def _to_bytes(self, value_unit):
         if not value_unit:
             return None
-        elif value_unit.endswith('B'):
-            return int(round(float(value_unit[:-1]) * u.B))
-        elif value_unit.endswith('K'):
-            return int(round(float(value_unit[:-1]) * u.K))
-        elif value_unit.endswith('M'):
-            return int(round(float(value_unit[:-1]) * u.M))
-        elif value_unit.endswith('G'):
-            return int(round(float(value_unit[:-1]) * u.G))
-        else:
-            return None
+        for unit in Unit:
+            if value_unit.endswith(unit.name):
+                return int(round(float(value_unit[:-1]) * unit.value))
+        return None
 
     def _to_unit(self, value_bytes):
         if not value_bytes:
             return None
-        elif value_bytes >= u.G:
-            return f'{value_bytes / u.G:.2f}G'.replace('.00G', 'G').replace('0G', 'G')
-        elif value_bytes >= u.M:
-            return f'{value_bytes / u.M:.2f}M'.replace('.00M', 'M').replace('0M', 'M')
-        elif value_bytes >= u.K:
-            return f'{value_bytes / u.K:.2f}K'.replace('.00K', 'K').replace('0K', 'K')
+        for unit in list(Unit)[::-1]:
+            if value_bytes >= unit.value:
+                unit_name = unit.name if unit.value > 1 else ''
+                return f'{value_bytes / unit.value:.2f}{unit_name}'.replace(f'.00{unit_name}', unit_name).replace(f'0{unit_name}', unit_name)
+
+    def get_ssh_user(self):
+        return environ.get('SSH_USER', environ['USER'])
+
+    def get_rights(self, user, env=None, app=None):
+        rights = {}
+        user_pkey_path = self.users_dir / user
+        if not user_pkey_path.exists():
+            raise ValueError(f"user '{user}' does not exist")
+        user_right_path = self.rights_dir / user
+        if user_right_path.exists():
+            with open(user_right_path) as f:
+                rights = dict((line.split(' ')[0], line.split(' ')[1:]) for line in f.read().split('\n') if line)
+        if env or app:
+            filtered_rights = {}
+            allowed_right_names = Right.names()
+            for name, (env_regex, app_regex) in rights.items():
+                if all((
+                    name in allowed_right_names,
+                    not env or match(env_regex, env),
+                    not app or match(app_regex, app),
+                )):
+                    filtered_rights[name] = (env_regex, app_regex)
+            return filtered_rights
         else:
-            return value_bytes
+            return rights
+
+    def check_right(self, right, env=None, app=None):
+        user = self.get_ssh_user()
+        if right.name not in self.get_rights(user, env=env, app=app):
+            raise PermissionError(f"User {user} does not have the right {right.name}{(' on ' + env) if env else ''}{(' on ' + app) if app else ''}")
+
+    def trace_action(self, action, args_dict):
+        with open(self.log_file, 'a') as f:
+            dt = datetime.now().replace(microsecond=0).isoformat(' ')
+            user = self.get_ssh_user()
+            args_str = ['='.join((k, f'"{str(v)}"')) for k, v in args_dict.items() if k != 'func']
+            f.write(f"{dt} {user} {action} {' '.join(args_str)}\n")
 
     def action_dcas(self, args):
+        self.check_right(Right.DCA_READ)
+        self.trace_action('dcas', vars(args))
         dcas = [f for f in self.dca_dir.iterdir() if f.is_file() and f.suffix == '.dca']
         if args.check:
             for f in dcas:
@@ -366,11 +573,13 @@ class CApp:
                 printflush(f.name)
 
     def action_deploy(self, args):
+        self.check_right(Right.DCA_READ)
         dca = (self.dca_dir / args.dca_file).resolve()
         if dca.parent != self.dca_dir or dca.suffix != '.dca' or not dca.is_file():
             raise ValueError(f"{args.dca_file} is incorrect")
         if not dca.with_suffix('.dca.sha256').is_file():
             raise ValueError(f"{args.dca_file}.sha256 is missing")
+        self.trace_action('deploy', vars(args))
         printflush(f"Deploying {dca.name}…")
         try:
             verify_checksum(dca)
@@ -393,6 +602,7 @@ class CApp:
             target_env = metadata.get('target_env', None)
             version = int(metadata.get('version', '1'))
             self._check_app_name_target_env(app, target_env)
+            self.check_right(Right.DEPLOY, app=app, env=target_env)
             default_hostname = self.capp_config['default_hostname']
             vhost_suffix = f"{'' if target_env == 'prod' else '-' + target_env}.{default_hostname}"
             target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
@@ -409,13 +619,13 @@ class CApp:
                 base_vhost = metadata.get(f'{svc_name}_base_vhost', None)
                 if base_vhost:
                     full_hostname = f'{base_vhost}{vhost_suffix}'
-                    for vhost in [x.split() for x in full_hostname.split(',')]:
+                    for vhost in [x.strip() for x in full_hostname.split(',')]:
                         server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
                         if server_nginx_config_file.is_file():
-                            copy(server_nginx_config_file, vhostd_dir / vhost[0])
+                            copy(server_nginx_config_file, vhostd_dir / vhost)
                         location_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-location'
                         if location_nginx_config_file.is_file():
-                            copy(location_nginx_config_file, vhostd_dir / f'{vhost[0]}_location')
+                            copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
         with open(target_dir / '.env', 'w') as f:
             f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n")
         with open(target_dir / '.version', 'w') as f:
@@ -456,7 +666,7 @@ class CApp:
             dump(dc, f)
         deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
         with open(deps_file, 'r+') as f:
-            deps = [l.strip() for l in f if not l.startswith(f'{app}/{target_env}:')]
+            deps = [line.strip() for line in f if not line.startswith(f'{app}/{target_env}:')]
             deps.append(f'{app}/{target_env}:proxy')
             f.seek(0)
             f.truncate()
@@ -476,18 +686,24 @@ class CApp:
         tmpl_name = self.compose_dirs_config.get('tmpl_name', 'compose')
         return f'{tmpl_name}@{full_name_systemd}'
 
-    def _check_app_name_target_env(self, app, target_env):
+    def _check_app_name(self, app):
         valid_app_name = r'[a-zA-Z][-_a-zA-Z0-9]+'
         if not all((
             app,
             match(f'^{valid_app_name}$', app),
         )):
             raise ValueError(f"app '{app or ''}' should be a valid name: {valid_app_name}")
+
+    def _check_target_env(self, target_env):
         if not all((
             target_env,
-            target_env in self.allowed_envs,
+            target_env in Env.names(),
         )):
-            raise ValueError(f"target environment '{target_env or ''}' should be a valid env: {', '.join(self.allowed_envs)}")
+            raise ValueError(f"target environment '{target_env or ''}' should be a valid env: {', '.join(env.name for env in Env)}")
+
+    def _check_app_name_target_env(self, app, target_env):
+        self._check_app_name(app)
+        self._check_target_env(target_env)
 
     def _check_compose(self, compose_file, version):
         if run(['docker-compose', '-f', str(compose_file), 'config', '-q'], capture_output=True).returncode:
@@ -498,8 +714,8 @@ class CApp:
             dc = full_load(f)
         for svc_name, svc_def in dc.get('services', {}).items():
             svc_names.append(svc_name)
-            limits.mem[svc_name] = 300 * u.M if version > 1 else 1 * u.G
-            limits.mem_avg[svc_name] = 100 * u.M if version > 1 else 300 * u.M
+            limits.mem[svc_name] = 300 * Unit.M.value if version > 1 else 1 * Unit.G.value
+            limits.mem_avg[svc_name] = 100 * Unit.M.value if version > 1 else 300 * Unit.M.value
             limits.cpu[svc_name] = 4
             if version > 1:
                 self._verify_compose_service(svc_name, svc_def)
@@ -677,6 +893,8 @@ class CApp:
         app = args.app
         target_env = args.env
         self._check_app_name_target_env(app, target_env)
+        self.check_right(Right.DEPLOY, app=app, env=target_env)
+        self.trace_action('undeploy', vars(args))
         printflush(f"Undeploying {app}/{target_env}…")
         target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
         try:
@@ -689,7 +907,7 @@ class CApp:
         run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
         deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
         with open(deps_file, 'r+') as f:
-            deps = [l.strip() for l in f if not l.startswith(f'{app}/{target_env}:')]
+            deps = [line.strip() for line in f if not line.startswith(f'{app}/{target_env}:')]
             f.seek(0)
             f.truncate()
             f.write('\n'.join(deps))
@@ -723,22 +941,26 @@ class CApp:
             self._post_undeploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
 
     def action_apps(self, args):
+        self.check_right(Right.APP_LIST)
+        self.trace_action('apps', vars(args))
         deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
         with open(deps_file) as f:
-            deps = [l.strip() for l in f if search(r'/.+:', l)]
+            deps = [line.strip() for line in f if search(r'/.+:', line)]
             for dep in sorted(deps):
                 app, env = dep.split(':')[0].split('/')
                 printflush(f'{app} {env}')
                 if args.verbose:
                     svc = self._get_systemd_service_name(app, env)
                     raw_status = run(['systemctl', 'status', '--no-pager', svc], env={'SYSTEMD_COLORS': '1'}, capture_output=True, text=True).stdout
-                    status = ''.join([l.replace('Active: ', '') for l in raw_status.split('\n') if search(r'Active:', l)])
+                    status = ''.join([line.replace('Active: ', '') for line in raw_status.split('\n') if search(r'Active:', line)])
                     printflush(status)
 
     def action_start(self, args):
         app = args.app
         target_env = args.env
         self._check_app_name_target_env(app, target_env)
+        self.check_right(Right.START, app=app, env=target_env)
+        self.trace_action('start', vars(args))
         svc = self._get_systemd_service_name(app, target_env)
         execlp('sudo', 'sudo', 'systemctl', 'start', svc)
 
@@ -746,6 +968,8 @@ class CApp:
         app = args.app
         target_env = args.env
         self._check_app_name_target_env(app, target_env)
+        self.check_right(Right.STOP, app=app, env=target_env)
+        self.trace_action('stop', vars(args))
         svc = self._get_systemd_service_name(app, target_env)
         execlp('sudo', 'sudo', 'systemctl', 'stop', svc)
 
@@ -753,6 +977,9 @@ class CApp:
         app = args.app
         target_env = args.env
         self._check_app_name_target_env(app, target_env)
+        self.check_right(Right.START, app=app, env=target_env)
+        self.check_right(Right.STOP, app=app, env=target_env)
+        self.trace_action('restart', vars(args))
         svc = self._get_systemd_service_name(app, target_env)
         execlp('sudo', 'sudo', 'systemctl', 'restart', svc)
 
@@ -760,6 +987,8 @@ class CApp:
         app = args.app
         target_env = args.env
         self._check_app_name_target_env(app, target_env)
+        self.check_right(Right.STATUS, app=app, env=target_env)
+        self.trace_action('status', vars(args))
         svc = self._get_systemd_service_name(app, target_env)
         execlp('systemctl', 'systemctl', 'status', '--no-pager', svc)
 
@@ -767,11 +996,134 @@ class CApp:
         app = args.app
         target_env = args.env
         self._check_app_name_target_env(app, target_env)
+        self.check_right(Right.LOGS, app=app, env=target_env)
+        self.trace_action('logs', vars(args))
         svc = self._get_systemd_service_name(app, target_env)
         if args.pager:
             execlp('journalctl', 'journalctl', '-feu', svc)
         else:
             execlp('journalctl', 'journalctl', '--no-pager', '-u', svc)
+
+    def _update_dca_and_deploy_keys(self):
+        users = dict(
+            (f, ' '.join(f.open().read().strip().split(' ')[:2]))
+            for f in self.users_dir.iterdir()
+            if f.is_file() and run(['ssh-keygen', '-l', '-q', '-f', str(f)], capture_output=True).returncode == 0
+        )
+        dca_users = {u: v for u, v in users.items() if Right.DCA_WRITE.name in self.get_rights(u.name)}
+        deploy_users = users
+        with open(self.dca_keys, 'w') as keys:
+            for f, pkey in dca_users.items():
+                keys.write(f'environment="SSH_USER={f.name}" {pkey} {f.name}\n')
+        with open(self.deploy_keys, 'w') as keys:
+            for f, pkey in deploy_users.items():
+                keys.write(f'environment="SSH_USER={f.name}" {pkey} {f.name}\n')
+
+    def action_list_users(self, args):
+        self.check_right(Right.USER_LIST)
+        self.trace_action('users-list', vars(args))
+        users = sorted([f for f in self.users_dir.iterdir() if f.is_file()])
+        for user in users:
+            fingerprint = run(['ssh-keygen', '-l', '-f', str(user)], capture_output=True, text=True).stdout.strip()
+            print(f"{user.name.ljust(19)} {fingerprint.split(' ')[1]}")
+
+    def action_add_user(self, args):
+        if not list(self.users_dir.iterdir()):
+            # special case with no user
+            # the call should therefore be local and not over ssh
+            first_user = True
+        else:
+            first_user = False
+            self.check_right(Right.USER_ADD)
+        user = args.user
+        pkey = args.pkey
+        user_pkey_path = self.users_dir / user
+        if user_pkey_path.exists():
+            raise ValueError(f"user '{user}' already exists")
+        self.trace_action('users-add', vars(args))
+        with open(user_pkey_path, 'w') as f:
+            f.write(pkey)
+        if first_user:
+            rights = {right: ('.*', '.*') for right in Right.names()}
+            self._update_user_rights(user, rights)
+            # no need to call _update_dca_and_deploy_keys as _update_user_rights already did it
+        else:
+            self._update_dca_and_deploy_keys()
+
+    def action_change_pkey(self, args):
+        user = args.user
+        pkey = args.pkey
+        if user != self.get_ssh_user():
+            self.check_right(Right.USER_CHANGE)
+        user_pkey_path = self.users_dir / user
+        if not user_pkey_path.exists():
+            raise ValueError(f"user '{user}' does not exist")
+        self.trace_action('users-change', vars(args))
+        with open(user_pkey_path, 'w') as f:
+            f.write(pkey)
+        self._update_dca_and_deploy_keys()
+
+    def action_delete_user(self, args):
+        self.check_right(Right.USER_DELETE)
+        user = args.user
+        user_pkey_path = self.users_dir / user
+        if not user_pkey_path.exists():
+            raise ValueError(f"user '{user}' does not exist")
+        self.trace_action('users-delete', vars(args))
+        user_pkey_path.unlink()
+        self._update_dca_and_deploy_keys()
+
+    def _update_user_rights(self, user, rights):
+        users = [f.name for f in self.users_dir.iterdir() if f.is_file()]
+        if user in users:
+            with open(self.rights_dir / user, 'w') as f:
+                for name, (env_regex, app_regex) in rights.items():
+                    f.write(f'{name} {env_regex} {app_regex}\n')
+        self._update_dca_and_deploy_keys()
+
+    def action_list_rights(self, args):
+        verbose = args.verbose
+        if verbose:
+            app = target_env = None
+        else:
+            app = args.app
+            target_env = args.env
+        if app:
+            self._check_app_name(app)
+        if target_env:
+            self._check_target_env(target_env)
+        user = args.user or self.get_ssh_user()
+        if user != self.get_ssh_user():
+            self.check_right(Right.RIGHT_LIST)
+        rights = self.get_rights(user, target_env, app)
+        self.trace_action('rights-list', vars(args))
+        if verbose:
+            for name, (env_regex, app_regex) in sorted(rights.items()):
+                print(f'{name.ljust(19)} {env_regex.ljust(39)} {app_regex}')
+        else:
+            print('\n'.join(sorted(rights)))
+
+    def action_add_rights(self, args):
+        self.check_right(Right.RIGHT_ADD, app=args.app, env=args.env)
+        user = args.user
+        new_rights = args.rights
+        rights = self.get_rights(user)
+        self.trace_action('rights-add', vars(args))
+        for right in new_rights:
+            name, env_regex, app_regex = right.split(',') if ',' in right else (right, '', '')
+            if name in Right.names():
+                rights[name] = [env_regex or '.*', app_regex or '.*']
+        self._update_user_rights(user, rights)
+
+    def action_delete_rights(self, args):
+        self.check_right(Right.RIGHT_DELETE, app=args.app, env=args.env)
+        user = args.user
+        old_rights = args.rights
+        rights = self.get_rights(user)
+        self.trace_action('rights-delete', vars(args))
+        for name in old_rights:
+            del rights[name]
+        self._update_user_rights(user, rights)
 
 
 if __name__ == '__main__':
