@@ -1,0 +1,20 @@
+#!/bin/sh
+grep -q '^PermitUserEnvironment yes' /etc/ssh/sshd_config || echo 'PermitUserEnvironment yes' >> /etc/ssh/sshd_config
+grep -q '^Match User dca' /etc/ssh/sshd_config || cat >> /etc/ssh/sshd_config <<EOF
+Match User dca
+    AuthorizedKeysFile /dev/null
+    AuthorizedKeysCommand /usr/local/bin/get_dca_keys
+    AuthorizedKeysCommandUser dca
+EOF
+cat >> /usr/local/bin/get_dca_keys <<'EOF'
+#!/bin/sh
+if [ "$1" = "dca" ]; then
+  for f in /etc/capp/users/*; do
+    u=$(basename "$f")
+    if [ -e /etc/capp/rights/$u ] && awk '{print $1}' /etc/capp/rights/$u | grep -q 'DCA_WRITE'; then
+        echo "environment=\"SSH_USER=$u\" $(cat "$f")"
+    fi
+  done
+fi
+EOF
+chmod +x /usr/local/bin/get_dca_keys

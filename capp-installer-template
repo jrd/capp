@@ -59,9 +59,8 @@ cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs /usr/local/bin/
 ln -sf $(which docker-compose) /usr/local/bin/dc
 mkdir -p /var/docker-volumes/nginx-proxy/{vhost.d,certs} /etc/compose /home/deploy/dca
 id -u compose >/dev/null 2>&1 || useradd --home-dir /etc/compose --no-create-home --user-group --shell /usr/sbin/nologin -c "Compose" -l compose
-chown :compose /var/docker-volumes/nginx-proxy/vhost.d
-chmod g+w /var/docker-volumes/nginx-proxy/vhost.d
-[ -f /etc/compose/dca/users-keys ] && cp /etc/compose/dca/users-keys dca/
+chown :compose /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/rights
+chmod g+w /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/rights
 cp -r proxy dca /etc/compose/
 if [ "$nohttps" -eq 1 ]; then
     # delete the letsencrypt service
@@ -73,7 +72,7 @@ if [ "$nohttps" -eq 1 ]; then
 fi
 sed -ri "s/dca:1000:1000/dca:$(id -u compose):$(id -g compose)/" /etc/compose/dca/docker-compose.yml
 mkdir -p /usr/local/bin
-cp capp verify_dca.py /usr/local/bin/
+cp capp verify_dca.py get_deploy_keys /usr/local/bin/
 chown compose: /usr/local/bin/capp
 cat > /etc/compose/proxy/.env <<EOF
 DEFAULT_HOST=$dh
@@ -92,13 +91,21 @@ fi
 chown -R compose: ~compose
 id -u deploy >/dev/null 2>&1 || useradd --no-create-home --user-group --password '*' -c "Deploy" deploy
 cat > ~deploy/capp <<'EOF'
-#!/bin/sh
-exec sudo -u compose /usr/local/bin/capp $SSH_ORIGINAL_COMMAND "$@"
+#!/bin/bash
+set -f
+SSH_ARRAY=()
+while IFS="\n" read -r V; do
+  SSH_ARRAY+=("$V")
+done <<< $(echo "$SSH_ORIGINAL_COMMAND" | sed -r 's/(^| )"/\n"/g; s/"( |$)/"\n/g;' | sed -r '/^[^"]/s/ /\n/g;' | grep -v '^$' | sed -r 's/^"//g; s/"$//g;')
+set -- "${SSH_ARRAY[@]}"
+exec sudo -u compose /usr/local/bin/capp "$@"
 EOF
 chmod +x ~deploy/capp
 chmod g+w ~deploy/dca
 chown -R deploy: ~deploy
 chown -R :compose ~deploy/dca
+grep -q '^PermitUserEnvironment yes' /etc/ssh/sshd_config || sed -ri '/^#PermitUserEnvironment /a PermitUserEnvironment yes' /etc/ssh/sshd_config
+grep -q '^Match User deploy' /etc/ssh/sshd_config && ! grep -q '^ *AuthorizedKeysCommand' /etc/ssh/sshd_config && sed -ri '/^Match User deploy/,/^.*AuthorizedKeys.*/d' /etc/ssh/sshd_config
 grep -q '^Match User deploy' /etc/ssh/sshd_config || cat >> /etc/ssh/sshd_config <<EOF
 Match User deploy
 	AllowAgentForwarding no
@@ -108,13 +115,16 @@ Match User deploy
         DisableForwarding yes
         PasswordAuthentication no
 	ForceCommand /home/deploy/capp
-        AuthorizedKeysFile /etc/deploy-authorized-keys
+        AuthorizedKeysFile /dev/null
+        AuthorizedKeysCommand /usr/local/bin/get_deploy_keys
+        AuthorizedKeysCommandUser compose
 EOF
-touch /etc/deploy-authorized-keys
-ln -sf /etc/compose/dca/users-keys /etc/dca-authorized-keys
+[ -e /etc/compose/dca/users-keys ] && rm /etc/compose/dca/users-keys
+[ -e /etc/deploy-authorized-keys ] && rm /etc/deploy-authorized-keys
+[ -e /etc/dca-authorized-keys ] && rm /etc/dca-authorized-keys
 touch /var/log/capp.log
-chown compose: /etc/deploy-authorized-keys /etc/dca-authorized-keys /etc/compose/dca/users-keys /var/log/capp.log
-chmod g+w: /etc/deploy-authorized-keys /etc/dca-authorized-keys /etc/compose/dca/users-keys /var/log/capp.log
+chown compose: /var/log/capp.log
+chmod g+w /var/log/capp.log
 groups compose | grep -q '\<docker\>' || usermod -a -G docker compose
 groups compose | grep -q '\<systemd-journal\>' || usermod -a -G systemd-journal compose
 groups compose | grep -q '\<deploy\>' || usermod -a -G deploy compose
@@ -122,11 +132,12 @@ cat > /etc/sudoers.d/compose <<EOF
 # Allow members of compose group to execute compose-dirs command
 Cmnd_Alias COMPOSE_DIRS = /usr/local/bin/compose-dirs
 Cmnd_Alias COMPOSE_SVC = /usr/bin/systemctl start compose@*, /usr/bin/systemctl stop compose@*, /usr/bin/systemctl restart compose@*
-Cmnd_Alias CAPP_HOOKS = /etc/capp/hooks.d/pre_deploy/*, /etc/capp/hooks.d/post_deploy/*, /etc/capp/hooks.d/pre_undeploy/*, /etc/capp/hooks.d/post_undeploy/*, 
+Cmnd_Alias CAPP_HOOKS = /etc/capp/hooks.d/pre_deploy/*, /etc/capp/hooks.d/post_deploy/*, /etc/capp/hooks.d/pre_undeploy/*, /etc/capp/hooks.d/post_undeploy/*
 %compose   ALL= NOPASSWD: COMPOSE_DIRS, COMPOSE_SVC, CAPP_HOOKS
 EOF
 cat > /etc/sudoers.d/deploy <<EOF
 # Allow members of deploy group to execute capp command
+Defaults env_keep="SSH_USER"
 Cmnd_Alias CAPP_CMD = /usr/local/bin/capp
 %deploy   ALL=(compose) NOPASSWD: CAPP_CMD
 EOF

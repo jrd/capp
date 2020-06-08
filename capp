@@ -178,10 +178,6 @@ class CApp:
             self.rights_dir.mkdir(exist_ok=True)
             self.dca_dir = Path('/tmp/capp/dca')
             self.dca_dir.mkdir(exist_ok=True)
-            self.dca_keys = Path('/tmp/capp/dca-authorized-keys')
-            self.dca_keys.touch()
-            self.deploy_keys = Path('/tmp/capp/deploy-authorized-keys')
-            self.deploy_keys.touch()
             self.log_file = Path('/tmp/capp/capp.log')
             self.log_file.touch()
             real_run = run
@@ -205,8 +201,6 @@ class CApp:
             self.users_dir = Path('/etc/capp/users')
             self.rights_dir = Path('/etc/capp/rights')
             self.dca_dir = Path('/home/deploy/dca')
-            self.dca_keys = Path('/etc/dca-authorized-keys')
-            self.deploy_keys = Path('/etc/deploy-authorized-keys')
             self.log_file = Path('/var/log/capp.log')
 
     def _append_usage_to_subcommands(self, sps):
@@ -1004,21 +998,6 @@ class CApp:
         else:
             execlp('journalctl', 'journalctl', '--no-pager', '-u', svc)
 
-    def _update_dca_and_deploy_keys(self):
-        users = dict(
-            (f, ' '.join(f.open().read().strip().split(' ')[:2]))
-            for f in self.users_dir.iterdir()
-            if f.is_file() and run(['ssh-keygen', '-l', '-q', '-f', str(f)], capture_output=True).returncode == 0
-        )
-        dca_users = {u: v for u, v in users.items() if Right.DCA_WRITE.name in self.get_rights(u.name)}
-        deploy_users = users
-        with open(self.dca_keys, 'w') as keys:
-            for f, pkey in dca_users.items():
-                keys.write(f'environment="SSH_USER={f.name}" {pkey} {f.name}\n')
-        with open(self.deploy_keys, 'w') as keys:
-            for f, pkey in deploy_users.items():
-                keys.write(f'environment="SSH_USER={f.name}" {pkey} {f.name}\n')
-
     def action_list_users(self, args):
         self.check_right(Right.USER_LIST)
         self.trace_action('users-list', vars(args))
@@ -1046,9 +1025,6 @@ class CApp:
         if first_user:
             rights = {right: ('.*', '.*') for right in Right.names()}
             self._update_user_rights(user, rights)
-            # no need to call _update_dca_and_deploy_keys as _update_user_rights already did it
-        else:
-            self._update_dca_and_deploy_keys()
 
     def action_change_pkey(self, args):
         user = args.user
@@ -1061,7 +1037,6 @@ class CApp:
         self.trace_action('users-change', vars(args))
         with open(user_pkey_path, 'w') as f:
             f.write(pkey)
-        self._update_dca_and_deploy_keys()
 
     def action_delete_user(self, args):
         self.check_right(Right.USER_DELETE)
@@ -1071,7 +1046,6 @@ class CApp:
             raise ValueError(f"user '{user}' does not exist")
         self.trace_action('users-delete', vars(args))
         user_pkey_path.unlink()
-        self._update_dca_and_deploy_keys()
 
     def _update_user_rights(self, user, rights):
         users = [f.name for f in self.users_dir.iterdir() if f.is_file()]
@@ -1079,7 +1053,6 @@ class CApp:
             with open(self.rights_dir / user, 'w') as f:
                 for name, (env_regex, app_regex) in rights.items():
                     f.write(f'{name} {env_regex} {app_regex}\n')
-        self._update_dca_and_deploy_keys()
 
     def action_list_rights(self, args):
         verbose = args.verbose
@@ -1104,7 +1077,7 @@ class CApp:
             print('\n'.join(sorted(rights)))
 
     def action_add_rights(self, args):
-        self.check_right(Right.RIGHT_ADD, app=args.app, env=args.env)
+        self.check_right(Right.RIGHT_ADD)
         user = args.user
         new_rights = args.rights
         rights = self.get_rights(user)
@@ -1116,7 +1089,7 @@ class CApp:
         self._update_user_rights(user, rights)
 
     def action_delete_rights(self, args):
-        self.check_right(Right.RIGHT_DELETE, app=args.app, env=args.env)
+        self.check_right(Right.RIGHT_DELETE)
         user = args.user
         old_rights = args.rights
         rights = self.get_rights(user)

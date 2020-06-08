@@ -1,14 +1,16 @@
 version: "2.4"
 services:
     scp:
-        image: panubo/sshd:1.2.0
+        image: panubo/sshd:1.2.1
         environment:
             - "SCP_MODE=true"
             - "MOTD=Docker Compose Archives"
             - "SSH_USERS=dca:1000:1000"
         volumes:
             - "keys:/etc/ssh/keys:rw"
-            - "./users-keys:/etc/authorized_keys/dca:ro"
+            - "./dca_keys_entrypoint:/etc/entrypoint.d/dca_keys:ro"
+            - "/etc/capp/users:/etc/capp/users:ro"
+            - "/etc/capp/rights:/etc/capp/rights:ro"
             - "/home/deploy/dca:/home/dca:rw"
         ports:
             - "0.0.0.0:122:22"
