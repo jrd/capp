@@ -94,7 +94,7 @@ cat > ~deploy/capp <<'EOF'
 #!/bin/bash
 set -f
 SSH_ARRAY=()
-while IFS="\n" read -r V; do
+while IFS="$(echo)" read -r V; do
   SSH_ARRAY+=("$V")
 done <<< $(echo "$SSH_ORIGINAL_COMMAND" | sed -r 's/(^| )"/\n"/g; s/"( |$)/"\n/g;' | sed -r '/^[^"]/s/ /\n/g;' | grep -v '^$' | sed -r 's/^"//g; s/"$//g;')
 set -- "${SSH_ARRAY[@]}"
