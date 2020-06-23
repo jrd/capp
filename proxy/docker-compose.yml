@@ -14,18 +14,13 @@ services:
       - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
   docker-gen:
-    #image: jwilder/docker-gen:0.7.3 until a new version with bugfixes is released (https://github.com/jwilder/docker-gen)
-    # coderedcorp seems to maintain a more up-to-date version (https://github.com/coderedcorp/docker-gen)
-    image: coderedcorp/docker-gen:0.7.5-cr1
+    image: registry.gitlab.com/systra/qeto/docker/docker-gen:0.7.5
     container_name: docker-gen
-    entrypoint: ["/usr/local/bin/docker-gen-wrapper"]
-    command: ["-notify-sighup", "nginx-proxy", "-watch", "-wait", "5s:30s", "/etc/docker-gen/templates/nginx.tmpl", "/etc/nginx/conf.d/default.conf"]
     environment:
       - "DEFAULT_HOST=${DEFAULT_HOST}"
     networks:
       - "network"
     volumes:
-      - ./docker-gen-wrapper:/usr/local/bin/docker-gen-wrapper:ro
       - ./nginx.tmpl:/etc/docker-gen/templates/nginx.tmpl:ro
       - /var/run/docker.sock:/tmp/docker.sock:ro
       - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
