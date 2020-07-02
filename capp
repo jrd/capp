@@ -865,6 +865,11 @@ class CApp:
         for hook_file in self._iter_hooks('undeploy', 'post'):
             self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
 
+    def _pull_image(self, target_dir):
+        printflush(end='')
+        if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
+            run(['docker-compose', 'pull', '--ignore-pull-failures'], cwd=target_dir, text=True)
+
     def _load_images(self, image_files):
         printflush(end='')
         for image_file in image_files:
