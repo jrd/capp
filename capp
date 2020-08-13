@@ -172,6 +172,8 @@ class CApp:
                     (self.hooks_root_dir / f'{m}_{a}').mkdir(parents=True, exist_ok=True)
                     f = self.hooks_root_dir / f'{m}_{a}' / 'hook'
                     f.touch(mode=0o744)
+            self.le_blacklist_file = Path('/tmp/capp/le_blacklist.txt')
+            self.le_blacklist_file.touch()
             self.users_dir = Path('/tmp/capp/users')
             self.users_dir.mkdir(exist_ok=True)
             self.rights_dir = Path('/tmp/capp/rights')
@@ -198,6 +200,7 @@ class CApp:
             self.compose_dirs_conf_file = Path('/etc/compose-dirs.conf')
             self.capp_conf_file = Path('/etc/capp.conf')
             self.hooks_root_dir = Path('/etc/capp/hooks.d')
+            self.le_blacklist_file = Path('/etc/capp/le_blacklist.txt')
             self.users_dir = Path('/etc/capp/users')
             self.rights_dir = Path('/etc/capp/rights')
             self.dca_dir = Path('/home/deploy/dca')
@@ -443,6 +446,7 @@ class CApp:
     def _check(self):
         self.compose_dirs_config = self._read_compose_dirs_config()
         self.capp_config = self._read_capp_config()
+        self.le_blacklist = self._read_le_blacklist()
         self._check_user()
 
     def _read_compose_dirs_config(self):
@@ -466,6 +470,14 @@ class CApp:
         cfg['max_mem_size'] = self._to_bytes(cfg.get('max_mem_size', '10240M'))
         cfg['default_hostname'] = cfg.get('default_hostname', getfqdn())
         return cfg
+
+    def _read_le_blacklist(self):
+        if self.le_blacklist_file.is_file():
+            with open(self.le_blacklist_file) as f:
+                lines = [line.strip() for line in f.readlines()]
+                return set(line for line in lines if line and line[0] != "#")
+        else:
+            return set()
 
     def _check_user(self):
         current_user_name = getpwuid(getuid()).pw_name
@@ -636,13 +648,15 @@ class CApp:
             if base_vhost:
                 if 'environment' not in svc_def:
                     svc_def['environment'] = {}
+                full_host = f'{base_vhost}{vhost_suffix}'
+                le_full_host = ','.join(host for host in full_host.split(',') if host.strip() not in self.le_blacklist)
                 if isinstance(svc_def['environment'], dict):
-                    svc_def['environment']['VIRTUAL_HOST'] = f'{base_vhost}{vhost_suffix}'
-                    svc_def['environment']['LETSENCRYPT_HOST'] = f'{base_vhost}{vhost_suffix}'
+                    svc_def['environment']['VIRTUAL_HOST'] = full_host
+                    svc_def['environment']['LETSENCRYPT_HOST'] = le_full_host
                     svc_def['environment']['VIRTUAL_PORT'] = metadata.get(f'{svc}_vhost_port', '80')
                 else:  # list
-                    svc_def['environment'].append(f'VIRTUAL_HOST={base_vhost}{vhost_suffix}')
-                    svc_def['environment'].append(f'LETSENCRYPT_HOST={base_vhost}{vhost_suffix}')
+                    svc_def['environment'].append(f'VIRTUAL_HOST={full_host}')
+                    svc_def['environment'].append(f'LETSENCRYPT_HOST={le_full_host}')
                     svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc}_vhost_port', '80')}")
                 if 'networks' not in svc_def:
                     svc_def['networks'] = []

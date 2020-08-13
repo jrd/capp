@@ -1,6 +1,14 @@
 CHANGELOG
 =========
 
+version 2.2.0
+-------------
+- Rights and user management
+- Generate `authorized_keys` on login attempt
+- Updated docker versions
+- Pull images on deploy
+- `/etc/capp/le_blacklist.txt` file to list host that should NOT be processed by Let's Encrypt
+
 version 2.1.0
 -------------
 - Usage of `verify_dca.py` in `capp`.
