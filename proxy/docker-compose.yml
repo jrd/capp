@@ -14,7 +14,7 @@ services:
       - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
   docker-gen:
-    image: registry.gitlab.com/systra/qeto/docker/docker-gen:0.7.5
+    image: jrdasm/docker-gen:0.7.5
     container_name: docker-gen
     environment:
       - "DEFAULT_HOST=${DEFAULT_HOST}"
