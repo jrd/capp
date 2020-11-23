@@ -29,6 +29,7 @@ Configuration
 Users allowed to upload [*DCA*](https://github.com/jrd/dca_format) files should have their public keys in `/etc/dca-authorized-keys`.
 
 Users allowed to act on deployments should have their public keys in `/etc/deploy-authorized-keys`.
+
 You don't have to do anything after modifying this file for the content to be taken into account.
 
 Admin usage
@@ -81,14 +82,19 @@ This will exit with `0` status if undeploy was ok, greater number in case of err
 
 See `ssh deploy@node help` for an exhaustive list of all actions and options.
 
-### Hacking as admin
+### Exec-ing into containers
 
-If you can log into *node* and change to the `compose` account or your account is in the `docker` group:
+Be sure to force a TTY with ssh: `ssh -t` or `RequestTTY yes` in `.ssh/config`.
 
+`sshi -t deploy@node exec my_app integ my_service`
+
+### Hack for admin
+
+- Connect into *node* and change to the `compose` account (or your account if in the `docker` group).
 - Go into you app and environment folder, containing `docker-compose.yml` file, for instance `cd myapp/prod` from `compose` home dir.
-- Then use any `docker-compose` command, like `exec` to enter a container.
+- Use any `docker-compose` command, like `exec` to enter a container.
 
-⚠ Keep it mind that the compose app is handled by a systemd service so **don't start or stop** the compose while the service is running.  
+⚠ Keep in mind that the compose app is handled by a systemd service so **don't start or stop** the compose while the service is running.  
 Better use the `capp start|stop` commands or `sudo systemctl start|stop` commands.
 
 License and authors
