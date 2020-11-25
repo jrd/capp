@@ -12,7 +12,7 @@ if [ "$1" = "dca" ]; then
   for f in /etc/capp/users/*; do
     u=$(basename "$f")
     if [ -e /etc/capp/rights/$u ] && awk '{print $1}' /etc/capp/rights/$u | grep -q 'DCA_WRITE'; then
-        echo "environment=\"SSH_USER=$u\" $(cat "$f")"
+        while IFS= read -r line; do echo "environment=\"SSH_USER=$u\" $line"; done <<< $(cat "$f")
     fi
   done
 fi

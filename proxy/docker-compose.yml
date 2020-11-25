@@ -1,7 +1,7 @@
 version: '2.4'
 services:
   nginx:
-    image: nginx
+    image: nginx:alpine
     container_name: nginx-proxy
     networks:
       - "network"
@@ -27,7 +27,7 @@ services:
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
       - nginx-conf:/etc/nginx/conf.d:rw
   letsencrypt:
-    image: jrcs/letsencrypt-nginx-proxy-companion:v1.13
+    image: jrcs/letsencrypt-nginx-proxy-companion:v1.13.1
     container_name: le-gen
     environment:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"

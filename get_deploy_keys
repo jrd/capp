@@ -2,6 +2,6 @@
 if [ "$1" = "deploy" ]; then
   for f in /etc/capp/users/*; do
     u=$(basename "$f")
-    echo "environment=\"SSH_USER=$u\" $(cat "$f")"
+    while IFS= read -r line; do echo "environment=\"SSH_USER=$u\" $line"; done <<< $(cat "$f")
   done
 fi
