@@ -6,7 +6,8 @@ DIRS = proxy dca
 ALL_SOURCES = $(wildcard $(addsuffix *,$(DIRS))) $(OCAL_SOURCES)
 
 $(INSTALLER): $(TMPL) $(ARCHIVE)
-	@(cat $(TMPL); base64 $(ARCHIVE)) > $@
+	@CAPP_VER=$$(sed -rn '/^__version__ =/{s/.*\((.+), (.+), (.+)\)/\1.\2.\3/;p}' capp); \
+	(sed -r "s/^CAPP_VER=.*/CAPP_VER=$$CAPP_VER/" $(TMPL); base64 $(ARCHIVE)) > $@
 	@chmod +x $@
 
 proxy/nginx.tmpl: proxy/get-nginx-tmpl

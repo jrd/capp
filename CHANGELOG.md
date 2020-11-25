@@ -1,8 +1,8 @@
 CHANGELOG
 =========
 
-Next
-----
+version 2.3.0
+-------------
 - Security updates (docker images)
 - Support for multiple (ssh) keys per user (`listkey`, `addkey`, `delkey`)
 - Support for `exec` action to enter an application service

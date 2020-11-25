@@ -1,12 +1,12 @@
 #!/bin/bash
+CAPP_VER=to_replace
 COMPOSE_SYSTEMD_VER=1.2.0
-set -e
 def_cont_mem='10G'
-usage() {
-    echo "$0 default_hostname default_email [container_max_memory_size=$def_cont_mem] [nohttps]" >&2
-    echo "  container_max_memory_size should be expressed with M or G units" >&2
-    exit 1
-}
+set -e
+if [ "$1" = "-v" ] || [ "$1" = "--version" ]; then
+    echo "$CAPP_VER"
+    exit 0
+fi
 if [ $(id -u) -ne 0 ]; then
     echo "Root required" >&2
     exit 1
@@ -19,6 +19,11 @@ for bin in useradd usermod base64 curl docker-compose sudo tar unxz; do
 done
 me=$(readlink -f "$0")
 offset=$(($(sed -rn '/#{10}/=' "$me") + 1))
+usage() {
+    echo "$0 default_hostname default_email [container_max_memory_size=$def_cont_mem] [nohttps]" >&2
+    echo "  container_max_memory_size should be expressed with M or G units" >&2
+    exit 1
+}
 dh="$1"
 [ -n "$dh" ] && shift || usage
 de="$1"
