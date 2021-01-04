@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 if [ "$1" = "deploy" ]; then
   for f in /etc/capp/users/*; do
     u=$(basename "$f")

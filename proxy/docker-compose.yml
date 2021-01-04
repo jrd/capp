@@ -27,7 +27,7 @@ services:
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
       - nginx-conf:/etc/nginx/conf.d:rw
   letsencrypt:
-    image: jrcs/letsencrypt-nginx-proxy-companion:v1.13.1
+    image: jrcs/letsencrypt-nginx-proxy-companion:2.0.2
     container_name: le-gen
     environment:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"
@@ -37,6 +37,7 @@ services:
       - "network"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - acme:/etc/acme.sh:rw
       - nginx-conf:/etc/nginx/conf.d:rw
       - nginx-html:/usr/share/nginx/html:rw
       - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:rw
@@ -46,3 +47,4 @@ networks:
 volumes:
   "nginx-conf":
   "nginx-html":
+  "acme":

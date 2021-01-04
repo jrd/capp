@@ -7,7 +7,7 @@ Match User dca
     AuthorizedKeysCommandUser dca
 EOF
 cat >> /usr/local/bin/get_dca_keys <<'EOF'
-#!/bin/sh
+#!/bin/bash
 if [ "$1" = "dca" ]; then
   for f in /etc/capp/users/*; do
     u=$(basename "$f")

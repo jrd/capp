@@ -1,6 +1,10 @@
 CHANGELOG
 =========
 
+version 2.3.1
+-------------
+- Let’s encrypt companion update
+
 version 2.3.0
 -------------
 - Security updates (docker images)
