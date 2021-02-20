@@ -96,14 +96,19 @@ fi
 chown -R compose: ~compose
 id -u deploy >/dev/null 2>&1 || useradd --no-create-home --user-group --password '*' -c "Deploy" deploy
 cat > ~deploy/capp <<'EOF'
-#!/bin/bash
-set -f
-SSH_ARRAY=()
-while IFS="$(echo)" read -r V; do
-  SSH_ARRAY+=("$V")
-done <<< $(echo "$SSH_ORIGINAL_COMMAND" | sed -r 's/(^| )"/\n"/g; s/"( |$)/"\n/g;' | sed -r '/^[^"]/s/ /\n/g;' | grep -v '^$' | sed -r 's/^"//g; s/"$//g;')
-set -- "${SSH_ARRAY[@]}"
-exec sudo -u compose /usr/local/bin/capp "$@"
+#!/bin/env python3
+from os import environ, execvpe
+from shlex import split
+from sys import exit
+
+args = ['sudo', '-u', 'compose', '/usr/local/bin/capp'] + split(environ.pop('SSH_ORIGINAL_COMMAND', ''))
+if 'SHELL' not in environ:
+    try:
+        environ['SHELL'] = [l.strip() for l in open('/etc/passwd').readlines() if l.startswith(environ['USER'] + ':')][0].split(':')[6]
+    except Exception:
+        pass
+execvpe('sudo', args, environ)
+exit(1)
 EOF
 chmod +x ~deploy/capp
 chmod g+w ~deploy/dca
