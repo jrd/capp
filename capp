@@ -661,16 +661,17 @@ class CApp:
             self._copy_context(tmpd / 'context', target_dir)
             vhostd_dir = Path('/var/docker-volumes/nginx-proxy/vhost.d')
             for svc_name in svc_names:
-                base_vhost = metadata.get(f'{svc_name}_base_vhost', None)
-                if base_vhost:
-                    full_hostname = f'{base_vhost}{vhost_suffix}'
-                    for vhost in [x.strip() for x in full_hostname.split(',')]:
-                        server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
-                        if server_nginx_config_file.is_file():
-                            copy(server_nginx_config_file, vhostd_dir / vhost)
-                        location_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-location'
-                        if location_nginx_config_file.is_file():
-                            copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
+                full_hostnames = [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')] \
+                    if f'{svc_name}_base_vhost' in metadata else [] + \
+                    [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')] \
+                    if f'{svc_name}_vhost' in metadata else []
+                for vhost in full_hostnames:
+                    server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
+                    if server_nginx_config_file.is_file():
+                        copy(server_nginx_config_file, vhostd_dir / vhost)
+                    location_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-location'
+                    if location_nginx_config_file.is_file():
+                        copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
         with open(target_dir / '.env', 'w') as f:
             f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n")
         with open(target_dir / '.version', 'w') as f:
@@ -681,34 +682,36 @@ class CApp:
             'external': True,
             'name': 'proxy_network',
         }
-        for svc in svc_names:
-            svc_def = dc['services'][svc]
-            base_vhost = metadata.get(f'{svc}_base_vhost', None)
-            if base_vhost:
-                if 'environment' not in svc_def:
-                    svc_def['environment'] = {}
-                full_host = f'{base_vhost}{vhost_suffix}'
-                le_full_host = ','.join(host for host in full_host.split(',') if host.strip() not in self.le_blacklist)
+        for svc_name in svc_names:
+            svc_def = dc['services'][svc_name]
+            full_hostnames = [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')] \
+                if f'{svc_name}_base_vhost' in metadata else [] + \
+                [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')] \
+                if f'{svc_name}_vhost' in metadata else []
+            if 'environment' not in svc_def:
+                svc_def['environment'] = {}
+                full_host = ','.join(host.strip() for host in full_hostnames)
+                le_full_host = ','.join(host.strip() for host in full_hostnames if host.strip() not in self.le_blacklist)
                 if isinstance(svc_def['environment'], dict):
                     svc_def['environment']['VIRTUAL_HOST'] = full_host
                     svc_def['environment']['LETSENCRYPT_HOST'] = le_full_host
-                    svc_def['environment']['VIRTUAL_PORT'] = metadata.get(f'{svc}_vhost_port', '80')
+                    svc_def['environment']['VIRTUAL_PORT'] = metadata.get(f'{svc_name}_vhost_port', '80')
                 else:  # list
                     svc_def['environment'].append(f'VIRTUAL_HOST={full_host}')
                     svc_def['environment'].append(f'LETSENCRYPT_HOST={le_full_host}')
-                    svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc}_vhost_port', '80')}")
+                    svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc_name}_vhost_port', '80')}")
                 if 'networks' not in svc_def:
                     svc_def['networks'] = []
                 if isinstance(svc_def['networks'], dict):
                     svc_def['networks']['proxy'] = {}
                 else:  # list
                     svc_def['networks'].append('proxy')
-            svc_def['mem_limit'] = f'{limits.mem[svc]}B'
-            svc_def['mem_reservation'] = f'{limits.mem_avg[svc]}B'
+            svc_def['mem_limit'] = f'{limits.mem[svc_name]}B'
+            svc_def['mem_reservation'] = f'{limits.mem_avg[svc_name]}B'
             svc_def['mem_swappiness'] = 10
             svc_def['oom_score_adj'] = 500  # prefer to kill containers than system processes
             # min = 1024 ÷ 4 (cpu = 1), avg = 1024 (cpu = 4), max 1024 × 4 (cpu = 16)
-            svc_def['cpu_shares'] = limits.cpu[svc] * 1024 // 4
+            svc_def['cpu_shares'] = limits.cpu[svc_name] * 1024 // 4
         with open(target_dir / 'docker-compose.yml', 'w') as f:
             dump(dc, f)
         run(['docker-compose', '-f', str(target_dir / 'docker-compose.yml'), 'pull', '--ignore-pull-failures', '--quiet'], text=True)
