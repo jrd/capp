@@ -723,7 +723,7 @@ class CApp:
             f.truncate()
             f.write('\n'.join(deps))
             f.write('\n')
-        run(['sudo', 'compose-dirs', 'update'], check=True, text=True)
+        run(['sudo', '/usr/local/bin/compose-dirs', 'update'], check=True, text=True)
         systemd_svc = self._get_systemd_service_name(app, target_env)
         if args.start:
             run(['sudo', 'systemctl', 'restart', systemd_svc], check=True, text=True)
@@ -969,7 +969,7 @@ class CApp:
             f.truncate()
             f.write('\n'.join(deps))
             f.write('\n')
-        run(['sudo', 'compose-dirs', 'update'], check=True, text=True)
+        run(['sudo', '/usr/local/bin/compose-dirs', 'update'], check=True, text=True)
         if target_dir.is_dir():
             with open(target_dir / 'docker-compose.yml') as f:
                 dc = full_load(f)
