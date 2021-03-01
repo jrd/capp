@@ -688,7 +688,7 @@ class CApp:
                 if f'{svc_name}_base_vhost' in metadata else [] + \
                 [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')] \
                 if f'{svc_name}_vhost' in metadata else []
-            if 'environment' not in svc_def:
+            if full_hostnames and 'environment' not in svc_def:
                 svc_def['environment'] = {}
                 full_host = ','.join(host.strip() for host in full_hostnames)
                 le_full_host = ','.join(host.strip() for host in full_hostnames if host.strip() not in self.le_blacklist)
@@ -700,6 +700,10 @@ class CApp:
                     svc_def['environment'].append(f'VIRTUAL_HOST={full_host}')
                     svc_def['environment'].append(f'LETSENCRYPT_HOST={le_full_host}')
                     svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc_name}_vhost_port', '80')}")
+            if 'environment' in svc_def and any((
+                isinstance(svc_def['environment'], dict) and 'VIRTUAL_HOST' in svc_def['environment'],
+                isinstance(svc_def['environment'], list) and any(e.startswith('VIRTUAL_HOST=') for e in svc_def['environment']),
+            )):
                 if 'networks' not in svc_def:
                     svc_def['networks'] = []
                 if isinstance(svc_def['networks'], dict):
