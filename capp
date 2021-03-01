@@ -713,7 +713,7 @@ class CApp:
             svc_def['mem_limit'] = f'{limits.mem[svc_name]}B'
             svc_def['mem_reservation'] = f'{limits.mem_avg[svc_name]}B'
             svc_def['mem_swappiness'] = 10
-            svc_def['oom_score_adj'] = 500  # prefer to kill containers than system processes
+            svc_def['oom_score_adj'] = 100  # prefer to kill containers than system processes
             # min = 1024 ÷ 4 (cpu = 1), avg = 1024 (cpu = 4), max 1024 × 4 (cpu = 16)
             svc_def['cpu_shares'] = limits.cpu[svc_name] * 1024 // 4
         with open(target_dir / 'docker-compose.yml', 'w') as f:
