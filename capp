@@ -672,8 +672,10 @@ class CApp:
                     location_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-location'
                     if location_nginx_config_file.is_file():
                         copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
+            orig_dotenv = tmpd / 'context' / '.env'
+            orig_dotenv_content = orig_dotenv.open().read() if orig_dotenv.exists() else ''
         with open(target_dir / '.env', 'w') as f:
-            f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n")
+            f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n{orig_dotenv_content}\n")
         with open(target_dir / '.version', 'w') as f:
             f.write(f"{version}\n")
         if 'networks' not in dc:
