@@ -661,10 +661,13 @@ class CApp:
             self._copy_context(tmpd / 'context', target_dir)
             vhostd_dir = Path('/var/docker-volumes/nginx-proxy/vhost.d')
             for svc_name in svc_names:
-                full_hostnames = [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')] \
-                    if f'{svc_name}_base_vhost' in metadata else [] + \
-                    [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')] \
+                full_hostnames = (
+                    [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')]
+                    if f'{svc_name}_base_vhost' in metadata else []
+                ) + (
+                    [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')]
                     if f'{svc_name}_vhost' in metadata else []
+                )
                 for vhost in full_hostnames:
                     server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
                     if server_nginx_config_file.is_file():
@@ -686,12 +689,16 @@ class CApp:
         }
         for svc_name in svc_names:
             svc_def = dc['services'][svc_name]
-            full_hostnames = [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')] \
-                if f'{svc_name}_base_vhost' in metadata else [] + \
-                [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')] \
+            full_hostnames = (
+                [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')]
+                if f'{svc_name}_base_vhost' in metadata else []
+            ) + (
+                [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')]
                 if f'{svc_name}_vhost' in metadata else []
-            if full_hostnames and 'environment' not in svc_def:
-                svc_def['environment'] = {}
+            )
+            if full_hostnames:
+                if 'environment' not in svc_def:
+                    svc_def['environment'] = {}
                 full_host = ','.join(host.strip() for host in full_hostnames)
                 le_full_host = ','.join(host.strip() for host in full_hostnames if host.strip() not in self.le_blacklist)
                 if isinstance(svc_def['environment'], dict):
@@ -702,9 +709,15 @@ class CApp:
                     svc_def['environment'].append(f'VIRTUAL_HOST={full_host}')
                     svc_def['environment'].append(f'LETSENCRYPT_HOST={le_full_host}')
                     svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc_name}_vhost_port', '80')}")
-            if 'environment' in svc_def and any((
-                isinstance(svc_def['environment'], dict) and 'VIRTUAL_HOST' in svc_def['environment'],
-                isinstance(svc_def['environment'], list) and any(e.startswith('VIRTUAL_HOST=') for e in svc_def['environment']),
+            if any((
+                'environment' in svc_def and isinstance(svc_def['environment'], dict) and
+                    'VIRTUAL_HOST' in svc_def['environment'],
+                'environment' in svc_def and isinstance(svc_def['environment'], list) and
+                    any(e.startswith('VIRTUAL_HOST=') for e in svc_def['environment']),
+                'env_file' in svc_def and isinstance(svc_def['env_file'], str) and
+                    any(e.startswith('VIRTUAL_HOST=') for e in (target_dir / svc_def['env_file']).open().readlines()),
+                'env_file' in svc_def and isinstance(svc_def['env_file'], list) and
+                    any(e.startswith('VIRTUAL_HOST=') for env_file in svc_def['env_file'] for e in (target_dir / env_file).open().readlines()),
             )):
                 if 'networks' not in svc_def:
                     svc_def['networks'] = []
