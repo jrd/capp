@@ -1,6 +1,6 @@
 #!/bin/bash
 CAPP_VER=to_replace
-COMPOSE_SYSTEMD_VER=1.2.0
+COMPOSE_SYSTEMD_VER=1.3.0
 def_cont_mem='10G'
 set -e
 if [ "$1" = "-v" ] || [ "$1" = "--version" ]; then
