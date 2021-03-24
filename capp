@@ -165,7 +165,7 @@ class CApp:
             Path('/tmp/capp/compose/deps').touch()
             self.capp_conf_file = Path('/tmp/capp/capp.conf')
             with open(self.capp_conf_file, 'w') as f:
-                f.write("default_hostname=example.com\nmax_mem_size=10G\n")
+                f.write("min_dca_version=2\nmax_mem_size=10G\nmax_proc=1000\ndefault_hostname=example.com\n")
             self.hooks_root_dir = Path('/tmp/capp/hooks.d')
             for a in ('deploy', 'undeploy'):
                 for m in ('pre', 'post'):
@@ -506,7 +506,9 @@ class CApp:
         with open(self.capp_conf_file) as f:
             parser.read_file(chain(('[def]',), f), source=f.name)
         cfg = dict(parser['def'])
+        cfg['min_dca_version'] = float(cfg.get('min_dca_version', '2'))
         cfg['max_mem_size'] = self._to_bytes(cfg.get('max_mem_size', '10240M'))
+        cfg['max_proc'] = int(cfg.get('max_proc', '1000'))
         cfg['default_hostname'] = cfg.get('default_hostname', getfqdn())
         return cfg
 
@@ -730,6 +732,7 @@ class CApp:
             svc_def['mem_swappiness'] = 10
             svc_def['oom_score_adj'] = 100  # prefer to kill containers than system processes
             # min = 1024 ÷ 4 (cpu = 1), avg = 1024 (cpu = 4), max 1024 × 4 (cpu = 16)
+            svc_def['pids_limit'] = self.capp_config['max_proc']
             svc_def['cpu_shares'] = limits.cpu[svc_name] * 1024 // 4
         with open(target_dir / 'docker-compose.yml', 'w') as f:
             dump(dc, f)
