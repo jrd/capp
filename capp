@@ -8,6 +8,7 @@ from configparser import ConfigParser
 from contextlib import contextmanager
 from datetime import datetime
 from enum import Enum
+from hashlib import sha256
 from itertools import chain
 from os import (
     environ,
@@ -647,14 +648,19 @@ class CApp:
             metadata = dict(parser['def'])
             app = metadata.get('app', None)
             target_env = metadata.get('target_env', None)
-            version = int(metadata.get('version', '1'))
+            version = float(metadata.get('version', '1'))
+            privileged = metadata.get('privileged', '0') == '1'
+            signature = metadata.get('signature', '')
+            self._check_dca_version(version)
             self._check_app_name_target_env(app, target_env)
+            if privileged:
+                self._check_signature(compose_file, signature)
             self.check_right(Right.DEPLOY, app=app, env=target_env)
             default_hostname = self.capp_config['default_hostname']
             vhost_suffix = f"{'' if target_env == 'prod' else '-' + target_env}.{default_hostname}"
             target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
             self._pre_deploy(app, target_env, version, compose_file, target_dir)
-            dc, svc_names, limits = self._check_compose(compose_file, version)
+            dc, svc_names, limits = self._check_compose(compose_file, version, privileged)
             self._check_limits(limits)
             self._load_images((tmpd / 'images').glob('*.tar.gz'))
             if args.clean:
@@ -760,6 +766,10 @@ class CApp:
         tmpl_name = self.compose_dirs_config.get('tmpl_name', 'compose')
         return f'{tmpl_name}@{full_name_systemd}'
 
+    def _check_dca_version(self, version):
+        if version < self.capp_config['min_dca_version']:
+            raise ValueError(f"minmum DCA version required is {self.capp_config['min_dca_version']}, given {version}")
+
     def _check_app_name(self, app):
         valid_app_name = r'[a-zA-Z][-_a-zA-Z0-9]+'
         if not all((
@@ -779,7 +789,12 @@ class CApp:
         self._check_app_name(app)
         self._check_target_env(target_env)
 
-    def _check_compose(self, compose_file, version):
+    def _check_signature(self, compose_file, signature):
+        content = compose_file.open('rb').read()
+        if sha256(content).hexdigest() != signature:
+            raise ValueError("metadata signature mismatch")
+
+    def _check_compose(self, compose_file, version, privileged=False):
         if run(['docker-compose', '-f', str(compose_file), 'config', '-q'], capture_output=True).returncode:
             raise ValueError(f'{compose_file.name} is incorrect')
         svc_names = []
@@ -792,7 +807,7 @@ class CApp:
             limits.mem_avg[svc_name] = 100 * Unit.M.value if version > 1 else 300 * Unit.M.value
             limits.cpu[svc_name] = 4
             if version > 1:
-                self._verify_compose_service(svc_name, svc_def)
+                self._verify_compose_service(svc_name, svc_def, privileged)
         if version > 1:
             for vol_name, vol_def in dc.get('volumes', {}).items():
                 self._verify_compose_volume(vol_name, vol_def)
@@ -802,40 +817,54 @@ class CApp:
                 self._verify_resources(res_name, res_def, limits)
         return dc, svc_names, limits
 
-    def _verify_compose_service(self, name, definition):
+    def _verify_compose_service(self, name, definition, privileged=False):
+        allowed_keys = (
+            'build',
+            'cap_drop',
+            'command',
+            'depends_on',
+            'entrypoint',
+            'env_file',
+            'environment',
+            'expose',
+            'extends',
+            'extra_hosts',
+            'group_add',
+            'healthcheck',
+            'image',
+            'init',
+            'labels',
+            'networks',
+            'pid',
+            'scale',
+            'stop_grace_period',
+            'stop_signal',
+            'sysctls',
+            'tmpfs',
+            'ulimits',
+            'volumes',
+            'volumes_from',
+            'restart',
+            'shm_size',
+            'tty',
+            'user',
+            'working_dir',
+        )
+        _volume_conditions = lambda vol_src: (  # noqa: E731
+            vol_src,
+            not match(r'[a-zA-Z]', vol_src),
+            not vol_src.startswith('./'),
+        )
+        if privileged:
+            allowed_keys += ('ports',)
+            volume_conditions = lambda vol_src: _volume_conditions(vol_src) + (  # noqa: E731
+                vol_src != '/var/run/docker.sock',
+                not vol_src.startswith('/var/docker-volumes/nginx-proxy/certs'),
+            )
+        else:
+            volume_conditions = _volume_conditions
         for key in (definition or {}).keys():
-            if key not in (
-                'build',
-                'cap_drop',
-                'command',
-                'depends_on',
-                'entrypoint',
-                'env_file',
-                'environment',
-                'expose',
-                'extends',
-                'extra_hosts',
-                'group_add',
-                'healthcheck',
-                'image',
-                'init',
-                'labels',
-                'networks',
-                'pid',
-                'scale',
-                'stop_grace_period',
-                'stop_signal',
-                'sysctls',
-                'tmpfs',
-                'ulimits',
-                'volumes',
-                'volumes_from',
-                'restart',
-                'shm_size',
-                'tty',
-                'user',
-                'working_dir',
-            ):
+            if key not in allowed_keys:
                 raise ValueError(f"key {key}, defined for {name} is not allowed in services section")
             if key == 'build':
                 build_def = definition[key]
@@ -877,11 +906,12 @@ class CApp:
                 volumes = definition[key]
                 for volume in volumes:
                     if isinstance(volume, str):
-                        if ':' in volume and not match(r'[a-zA-Z]', volume) and not volume.startswith('./'):
+                        vol_src = volume.split(':')[0] if ':' in volume else volume
+                        if all(volume_conditions(vol_src)):
                             raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
                     else:
                         vol_src = volume.get('source', '')
-                        if vol_src and not match(r'[a-zA-Z]', vol_src) and not vol_src.startswith('./'):
+                        if all(volume_conditions(vol_src)):
                             raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
 
     def _verify_compose_volume(self, name, definition):
