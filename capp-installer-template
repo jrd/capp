@@ -54,14 +54,16 @@ while [ -n "$1" ]; do
         usage
     fi
 done
+[ -n "$min_dca_ver" ] || min_dca_ver=$def_min_dca_ver
 [ -n "$cont_mem" ] || cont_mem=$def_cont_mem
+[ -n "$cont_proc" ] || cont_proc=$def_cont_proc
 cat > /etc/capp.conf <<EOF
 min_dca_version=${min_dca_ver}
 max_mem_size=${cont_mem}
 max_proc=${cont_proc}
 default_hostname=${dh}
 EOF
-mkdir -p /etc/capp/users /etc/capp/rights /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy}
+mkdir -p /etc/capp/users /etc/capp/pubkeys /etc/capp/rights /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy}
 tmpdir=$(mktemp -d)
 cd $tmpdir
 curl -Ls https://github.com/jrd/compose-systemd/archive/v${COMPOSE_SYSTEMD_VER}.tar.gz | tar xzf -
@@ -71,8 +73,8 @@ cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs /usr/local/bin/
 ln -sf $(which docker-compose) /usr/local/bin/dc
 mkdir -p /var/docker-volumes/nginx-proxy/{vhost.d,certs} /etc/compose /home/deploy/dca
 id -u compose >/dev/null 2>&1 || useradd --home-dir /etc/compose --no-create-home --user-group --shell /usr/sbin/nologin -c "Compose" -l compose
-chown :compose /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/rights
-chmod g+w /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/rights
+chown :compose /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/pubkeys /etc/capp/rights
+chmod g+w,o=rX /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/pubkeys /etc/capp/rights
 cp -r proxy dca /etc/compose/
 if [ "$nohttps" -eq 1 ]; then
     # delete the letsencrypt service
@@ -145,10 +147,11 @@ chmod g+w /var/log/capp.log
 groups compose | grep -q '\<docker\>' || usermod -a -G docker compose
 groups compose | grep -q '\<systemd-journal\>' || usermod -a -G systemd-journal compose
 groups compose | grep -q '\<deploy\>' || usermod -a -G deploy compose
+systemctl_path=$(which systemctl)
 cat > /etc/sudoers.d/compose <<EOF
 # Allow members of compose group to execute compose-dirs command
 Cmnd_Alias COMPOSE_DIRS = /usr/local/bin/compose-dirs
-Cmnd_Alias COMPOSE_SVC = /usr/bin/systemctl start compose@*, /usr/bin/systemctl stop compose@*, /usr/bin/systemctl restart compose@*
+Cmnd_Alias COMPOSE_SVC = $systemctl_path start compose@*, $systemctl_path stop compose@*, $systemctl_path restart compose@*, $systemctl_path status compose@*
 Cmnd_Alias CAPP_HOOKS = /etc/capp/hooks.d/pre_deploy/*, /etc/capp/hooks.d/post_deploy/*, /etc/capp/hooks.d/pre_undeploy/*, /etc/capp/hooks.d/post_undeploy/*
 %compose   ALL= NOPASSWD: COMPOSE_DIRS, COMPOSE_SVC, CAPP_HOOKS
 EOF

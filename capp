@@ -3,6 +3,7 @@ from argparse import (
     ArgumentParser,
     RawTextHelpFormatter,
 )
+from base64 import b64decode
 from collections import namedtuple
 from configparser import ConfigParser
 from contextlib import contextmanager
@@ -37,6 +38,7 @@ from stat import (
     S_IXUSR,
 )
 from subprocess import (
+    CalledProcessError,
     CompletedProcess,
     run,
 )
@@ -147,6 +149,7 @@ Right = EnumNames('Right', (
     'DCA_READ', 'DCA_WRITE', 'APP_LIST',
     'DEPLOY', 'START', 'STOP', 'STATUS', 'LOGS', 'EXEC',
     'USER_LIST', 'USER_ADD', 'USER_CHANGE', 'USER_DELETE',
+    'PKEY_LIST', 'PKEY_ADD', 'PKEY_DELETE',
     'RIGHT_LIST', 'RIGHT_ADD', 'RIGHT_DELETE',
 ))
 
@@ -177,6 +180,8 @@ class CApp:
             self.le_blacklist_file.touch()
             self.users_dir = Path('/tmp/capp/users')
             self.users_dir.mkdir(exist_ok=True)
+            self.pubkeys_dir = Path('/tmp/capp/pubkeys')
+            self.pubkeys_dir.mkdir(exist_ok=True)
             self.rights_dir = Path('/tmp/capp/rights')
             self.rights_dir.mkdir(exist_ok=True)
             self.dca_dir = Path('/tmp/capp/dca')
@@ -203,6 +208,7 @@ class CApp:
             self.hooks_root_dir = Path('/etc/capp/hooks.d')
             self.le_blacklist_file = Path('/etc/capp/le_blacklist.txt')
             self.users_dir = Path('/etc/capp/users')
+            self.pubkeys_dir = Path('/etc/capp/pubkeys')
             self.rights_dir = Path('/etc/capp/rights')
             self.dca_dir = Path('/home/deploy/dca')
             self.log_file = Path('/var/log/capp.log')
@@ -422,6 +428,38 @@ class CApp:
         rsp.add_argument('user', metavar='USER', help="User account name")
         rsp.add_argument('pkey', metavar='PUBLIC KEY', help="existing user public key")
         rsp.set_defaults(func=self.action_delete_pkey)
+        # public keys
+        descr = "Public keys management commands."
+        sp = sps.add_parser('pubkeys', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr)
+        rsps = sp.add_subparsers(title='actions', metavar='ACTION', required=True,
+                                 description="Use ACTION -h|--help to get full help on any action",
+                                 help="One of the following action is required\n ")
+        descr = (
+            "List the public keys allowed to validate a DCA signature."
+        )
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.PKEY_LIST.name}"
+        )
+        rsp = rsps.add_parser('list', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('-v', '--verbose', action='store_true', help="Output full fingerprints.")
+        rsp.set_defaults(func=self.action_list_pubkeys)
+        descr = "Add a public key to validate DCA signatures."
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.PKEY_ADD.name}"
+        )
+        rsp = rsps.add_parser('add', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('pubkey', metavar='PUBLIC KEY', help="Signature public key")
+        rsp.set_defaults(func=self.action_add_pubkey)
+        descr = "Delete a public key to validate DCA signatures."
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.PKEY_DELETE.name}"
+        )
+        rsp = rsps.add_parser('delete', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('fingerprint', help="Signature public key fingerprint hash")
+        rsp.set_defaults(func=self.action_delete_pubkey)
         # rights
         descr = "Rights management commands."
         sp = sps.add_parser('rights', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr)
@@ -442,7 +480,7 @@ class CApp:
         rsp.add_argument('--user', nargs='?', const=None, default=None, dest='user', metavar='USER', help=f"User account name. Default to {self.get_ssh_user()}")
         rsp.add_argument('-v', '--verbose', action='store_true', help="Output all right names and regex. env and app are ignored.")
         rsp.set_defaults(func=self.action_list_rights)
-        descr = "Add some righs to a user account."
+        descr = "Add some rights to a user account."
         epilog = (
             "Rights should be defined like this: RIGHT,ENV_REGEX,APP_REGEX or just RIGHT"
             f"\nValid right names are: {' '.join(sorted(Right.names()))}"
@@ -453,7 +491,7 @@ class CApp:
         rsp.add_argument('user', metavar='USER', help="User account name")
         rsp.add_argument('rights', nargs='+', metavar='RIGHT,ENV_REGEX,APP_REGEX', help="right name, environment regex, app regex.")
         rsp.set_defaults(func=self.action_add_rights)
-        descr = "Delete some righs from a user account."
+        descr = "Delete some rights from a user account."
         epilog = (
             f"Valid right names are: {' '.join(sorted(Right.names()))}"
             "\n\nRequired rights:"
@@ -789,9 +827,35 @@ class CApp:
         self._check_app_name(app)
         self._check_target_env(target_env)
 
-    def _check_signature(self, compose_file, signature):
-        content = compose_file.open('rb').read()
-        if sha256(content).hexdigest() != signature:
+    def _verify_signature(self, signature, compose_file, pubkey_file):
+        with temp_dir() as tmpd:
+            try:
+                # convert openssh public key to PKCS#8
+                temp_pubkey_file = tmpd / 'public.pem'
+                with open(temp_pubkey_file, 'w') as f:
+                    f.write(run(['ssh-keygen', '-e', '-f', str(pubkey_file), '-m', 'pkcs8'], capture_output=True, text=True).stdout)
+                run([
+                    'openssl', 'dgst',
+                    '-sha256',
+                    '-verify', str(temp_pubkey_file),
+                    '-signature', '/dev/stdin',
+                    str(compose_file),
+                ],
+                    input=signature,
+                    check=True,
+                    capture_output=True,
+                )
+                return True
+            except CalledProcessError:
+                return False
+
+    def _check_signature(self, compose_file, signature_base64):
+        signature = b64decode(signature_base64)
+        for pubkey_file in (f for f in self.pubkeys_dir.iterdir() if f.is_file() and f.suffix == '.pub'):
+            if self._verify_signature(signature, compose_file, pubkey_file):
+                printflush("signature: 'OK'")
+                break
+        else:
             raise ValueError("metadata signature mismatch")
 
     def _check_compose(self, compose_file, version, privileged=False):
@@ -1202,6 +1266,53 @@ class CApp:
             with open(self.rights_dir / user, 'w') as f:
                 for name, (env_regex, app_regex) in rights.items():
                     f.write(f'{name} {env_regex} {app_regex}\n')
+
+    def action_list_pubkeys(self, args):
+        self.check_right(Right.PKEY_LIST)
+        verbose = args.verbose
+        pubkey_files = sorted([f for f in self.pubkeys_dir.iterdir() if f.is_file() and f.suffix == '.pub'])
+        full_fingerprints = []
+        for pubkey_file in pubkey_files:
+            try:
+                full_fingerprints.append(run(
+                    ['ssh-keygen', '-lf', str(pubkey_file)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip())
+            except CalledProcessError:
+                pass
+        self.trace_action('pubkeys-list', vars(args))
+        if verbose:
+            if full_fingerprints:
+                print('\n'.join(full_fingerprints))
+        else:
+            for full_fingerprint in full_fingerprints:
+                fingerprint = full_fingerprint.split(' ')
+                print(f"{fingerprint[1].split(':')[1]}  {fingerprint[2]}")
+
+    def action_add_pubkey(self, args):
+        self.check_right(Right.PKEY_ADD)
+        pubkey = args.pubkey
+        fingerprint = run(
+            ['ssh-keygen', '-lf', '-'],
+            input=pubkey,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip().split(' ')[1].split(':')[1]
+        pubkey_file = self.pubkeys_dir / (sha256(fingerprint.encode('ascii')).hexdigest() + '.pub')
+        with open(pubkey_file, 'w') as f:
+            f.write(pubkey)
+        self.trace_action('pubkeys-add', vars(args))
+
+    def action_delete_pubkey(self, args):
+        self.check_right(Right.PKEY_DELETE)
+        fingerprint = args.fingerprint
+        pubkey_file = self.pubkeys_dir / (sha256(fingerprint.encode('ascii')).hexdigest() + '.pub')
+        if pubkey_file.exists():
+            pubkey_file.unlink()
+        self.trace_action('pubkeys-delete', vars(args))
 
     def action_list_rights(self, args):
         verbose = args.verbose
