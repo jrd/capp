@@ -26,9 +26,9 @@ from shutil import (
     rmtree,
 )
 from signal import (
+    Signals,
     getsignal,
     signal,
-    Signals,
 )
 from socket import getfqdn
 from stat import (
