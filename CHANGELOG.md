@@ -1,9 +1,10 @@
 CHANGELOG
 =========
 
-version 2.5.1
+Next
 -------------
-- Update image versions
+- Updated image versions.
+- `capp` can be tested in docker.
 
 version 2.5.0
 -------------

@@ -168,7 +168,6 @@ docker-compose pull
 cd /etc/compose/proxy
 docker-compose pull
 rm -rf $tmpdir
-set -x
 /usr/local/bin/compose-dirs install
 /usr/local/bin/compose-dirs update
 /usr/local/bin/compose-dirs start
