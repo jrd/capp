@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "Passing exec to systemd"
+exec /lib/systemd/systemd
