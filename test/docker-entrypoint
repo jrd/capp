@@ -1,0 +1,4 @@
+#!/bin/sh
+/root/capp-installer "$@"
+echo "Passing exec to systemd"
+exec /lib/systemd/systemd
