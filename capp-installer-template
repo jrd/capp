@@ -105,7 +105,7 @@ fi
 chown -R compose: ~compose
 id -u deploy >/dev/null 2>&1 || useradd --no-create-home --user-group --password '*' -c "Deploy" deploy
 cat > ~deploy/capp <<'EOF'
-#!/bin/env python3
+#!/usr/bin/env python3
 from os import environ, execvpe
 from shlex import split
 from sys import exit
@@ -162,6 +162,7 @@ Cmnd_Alias CAPP_CMD = /usr/local/bin/capp
 %deploy   ALL=(compose) NOPASSWD: CAPP_CMD
 EOF
 chmod u=r,g=r,o= /etc/sudoers.d/{compose,deploy}
+set +e
 cd /etc/compose/dca
 docker-compose pull
 cd /etc/compose/proxy
