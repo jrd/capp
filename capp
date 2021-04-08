@@ -163,12 +163,12 @@ class CApp:
         if self.dry_run:
             Path('/tmp/capp').mkdir(parents=True, exist_ok=True)
             self.compose_dirs_conf_file = Path('/tmp/capp/compose-dirs.conf')
-            with open(self.compose_dirs_conf_file, 'w') as f:
+            with open(self.compose_dirs_conf_file, 'w', encoding='utf8') as f:
                 f.write(f"compose_user={getpwuid(getuid()).pw_name}\ncompose_dir=/tmp/capp/compose\ndeps_file=deps\ntmpl_name=compose\n")
             Path('/tmp/capp/compose').mkdir(parents=True, exist_ok=True)
             Path('/tmp/capp/compose/deps').touch()
             self.capp_conf_file = Path('/tmp/capp/capp.conf')
-            with open(self.capp_conf_file, 'w') as f:
+            with open(self.capp_conf_file, 'w', encoding='utf8') as f:
                 f.write("min_dca_version=2\nmax_mem_size=10G\nmax_proc=1000\ndefault_hostname=example.com\n")
             self.hooks_root_dir = Path('/tmp/capp/hooks.d')
             for a in ('deploy', 'undeploy'):
@@ -176,6 +176,7 @@ class CApp:
                     (self.hooks_root_dir / f'{m}_{a}').mkdir(parents=True, exist_ok=True)
                     f = self.hooks_root_dir / f'{m}_{a}' / 'hook'
                     f.touch(mode=0o744)
+            # lets’s encrypt black list file
             self.le_blacklist_file = Path('/tmp/capp/le_blacklist.txt')
             self.le_blacklist_file.touch()
             self.users_dir = Path('/tmp/capp/users')
@@ -206,6 +207,7 @@ class CApp:
             self.compose_dirs_conf_file = Path('/etc/compose-dirs.conf')
             self.capp_conf_file = Path('/etc/capp.conf')
             self.hooks_root_dir = Path('/etc/capp/hooks.d')
+            # lets’s encrypt black list file
             self.le_blacklist_file = Path('/etc/capp/le_blacklist.txt')
             self.users_dir = Path('/etc/capp/users')
             self.pubkeys_dir = Path('/etc/capp/pubkeys')
@@ -534,16 +536,16 @@ class CApp:
                 f"\n{self.compose_dirs_conf_file} file should exist"
             )
         parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
-        with open(self.compose_dirs_conf_file) as f:
-            parser.read_file(chain(('[def]',), f), source=f.name)
+        with open(self.compose_dirs_conf_file, encoding='utf8') as f:
+            parser.read_file(chain(('[def]',), f))
         return dict(parser['def'])
 
     def _read_capp_config(self):
         if not self.capp_conf_file.is_file():
             raise ValueError(f"{self.capp_conf_file} file should exist")
         parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
-        with open(self.capp_conf_file) as f:
-            parser.read_file(chain(('[def]',), f), source=f.name)
+        with open(self.capp_conf_file, encoding='utf8') as f:
+            parser.read_file(chain(('[def]',), f))
         cfg = dict(parser['def'])
         cfg['min_dca_version'] = float(cfg.get('min_dca_version', '2'))
         cfg['max_mem_size'] = self._to_bytes(cfg.get('max_mem_size', '10240M'))
@@ -553,7 +555,7 @@ class CApp:
 
     def _read_le_blacklist(self):
         if self.le_blacklist_file.is_file():
-            with open(self.le_blacklist_file) as f:
+            with open(self.le_blacklist_file, encoding='utf8') as f:
                 lines = [line.strip() for line in f.readlines()]
                 return set(line for line in lines if line and line[0] != "#")
         else:
@@ -610,7 +612,7 @@ class CApp:
             raise ValueError(f"user '{user}' does not exist")
         user_right_path = self.rights_dir / user
         if user_right_path.exists():
-            with open(user_right_path) as f:
+            with open(user_right_path, encoding='utf8') as f:
                 rights = dict((line.split(' ')[0], line.split(' ')[1:]) for line in f.read().split('\n') if line)
         if env or app:
             filtered_rights = {}
@@ -632,7 +634,7 @@ class CApp:
             raise PermissionError(f"User {user} does not have the right {right.name}{(' on ' + env) if env else ''}{(' on ' + app) if app else ''}")
 
     def trace_action(self, action, args_dict):
-        with open(self.log_file, 'a') as f:
+        with open(self.log_file, 'a', encoding='utf8') as f:
             dt = datetime.now().replace(microsecond=0).isoformat(' ')
             user = self.get_ssh_user()
             args_str = ['='.join((k, f'"{str(v)}"')) for k, v in args_dict.items() if k != 'func']
@@ -681,8 +683,8 @@ class CApp:
                 if not f.is_file():
                     raise ValueError(f"Bad {dca.name}: missing {f.name}")
             parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
-            with open(metadata_file) as f:
-                parser.read_file(chain(('[def]',), f), source=f.name)
+            with open(metadata_file, encoding='utf8') as f:
+                parser.read_file(chain(('[def]',), f))
             metadata = dict(parser['def'])
             app = metadata.get('app', None)
             target_env = metadata.get('target_env', None)
@@ -707,13 +709,7 @@ class CApp:
             self._copy_context(tmpd / 'context', target_dir)
             vhostd_dir = Path('/var/docker-volumes/nginx-proxy/vhost.d')
             for svc_name in svc_names:
-                full_hostnames = (
-                    [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')]
-                    if f'{svc_name}_base_vhost' in metadata else []
-                ) + (
-                    [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')]
-                    if f'{svc_name}_vhost' in metadata else []
-                )
+                full_hostnames = self._build_full_hostnames(metadata, vhost_suffix, svc_name)
                 for vhost in full_hostnames:
                     server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
                     if server_nginx_config_file.is_file():
@@ -722,10 +718,10 @@ class CApp:
                     if location_nginx_config_file.is_file():
                         copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
             orig_dotenv = tmpd / 'context' / '.env'
-            orig_dotenv_content = orig_dotenv.open().read() if orig_dotenv.exists() else ''
-        with open(target_dir / '.env', 'w') as f:
+            orig_dotenv_content = orig_dotenv.open(encoding='utf8').read() if orig_dotenv.exists() else ''
+        with open(target_dir / '.env', 'w', encoding='utf8') as f:
             f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n{orig_dotenv_content}\n")
-        with open(target_dir / '.version', 'w') as f:
+        with open(target_dir / '.version', 'w', encoding='ascii') as f:
             f.write(f"{version}\n")
         if 'networks' not in dc:
             dc['networks'] = {}
@@ -735,25 +731,19 @@ class CApp:
         }
         for svc_name in svc_names:
             svc_def = dc['services'][svc_name]
-            full_hostnames = (
-                [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')]
-                if f'{svc_name}_base_vhost' in metadata else []
-            ) + (
-                [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')]
-                if f'{svc_name}_vhost' in metadata else []
-            )
+            full_hostnames = self._build_full_hostnames(metadata, vhost_suffix, svc_name)
             if full_hostnames:
                 if 'environment' not in svc_def:
                     svc_def['environment'] = {}
                 full_host = ','.join(host.strip() for host in full_hostnames)
-                le_full_host = ','.join(host.strip() for host in full_hostnames if host.strip() not in self.le_blacklist)
+                letsencrypt_full_host = ','.join(host.strip() for host in full_hostnames if host.strip() not in self.le_blacklist)
                 if isinstance(svc_def['environment'], dict):
                     svc_def['environment']['VIRTUAL_HOST'] = full_host
-                    svc_def['environment']['LETSENCRYPT_HOST'] = le_full_host
+                    svc_def['environment']['LETSENCRYPT_HOST'] = letsencrypt_full_host
                     svc_def['environment']['VIRTUAL_PORT'] = metadata.get(f'{svc_name}_vhost_port', '80')
                 else:  # list
                     svc_def['environment'].append(f'VIRTUAL_HOST={full_host}')
-                    svc_def['environment'].append(f'LETSENCRYPT_HOST={le_full_host}')
+                    svc_def['environment'].append(f'LETSENCRYPT_HOST={letsencrypt_full_host}')
                     svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc_name}_vhost_port', '80')}")
             if any((
                 'environment' in svc_def and isinstance(svc_def['environment'], dict) and
@@ -761,9 +751,9 @@ class CApp:
                 'environment' in svc_def and isinstance(svc_def['environment'], list) and
                     any(e.startswith('VIRTUAL_HOST=') for e in svc_def['environment']),
                 'env_file' in svc_def and isinstance(svc_def['env_file'], str) and
-                    any(e.startswith('VIRTUAL_HOST=') for e in (target_dir / svc_def['env_file']).open().readlines()),
+                    any(e.startswith('VIRTUAL_HOST=') for e in (target_dir / svc_def['env_file']).open(encoding='utf8').readlines()),
                 'env_file' in svc_def and isinstance(svc_def['env_file'], list) and
-                    any(e.startswith('VIRTUAL_HOST=') for env_file in svc_def['env_file'] for e in (target_dir / env_file).open().readlines()),
+                    any(e.startswith('VIRTUAL_HOST=') for env_file in svc_def['env_file'] for e in (target_dir / env_file).open(encoding='utf8').readlines()),
             )):
                 if 'networks' not in svc_def:
                     svc_def['networks'] = []
@@ -778,11 +768,11 @@ class CApp:
             # min = 1024 ÷ 4 (cpu = 1), avg = 1024 (cpu = 4), max 1024 × 4 (cpu = 16)
             svc_def['pids_limit'] = self.capp_config['max_proc']
             svc_def['cpu_shares'] = limits.cpu[svc_name] * 1024 // 4
-        with open(target_dir / 'docker-compose.yml', 'w') as f:
+        with open(target_dir / 'docker-compose.yml', 'w', encoding='utf8') as f:
             dump(dc, f)
         run(['docker-compose', '-f', str(target_dir / 'docker-compose.yml'), 'pull', '--ignore-pull-failures', '--quiet'], text=True)
         deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
-        with open(deps_file, 'r+') as f:
+        with open(deps_file, 'r+', encoding='utf8') as f:
             deps = [line.strip() for line in f if not line.startswith(f'{app}/{target_env}:')]
             deps.append(f'{app}/{target_env}:proxy')
             f.seek(0)
@@ -798,6 +788,15 @@ class CApp:
         run(['docker', 'image', 'prune', '-f'], text=True)
         self._post_deploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
 
+    def _build_full_hostnames(self, metadata, vhost_suffix, svc_name):
+        return (
+            [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')]
+            if f'{svc_name}_base_vhost' in metadata else []
+        ) + (
+            [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')]
+            if f'{svc_name}_vhost' in metadata else []
+        )
+
     def _get_systemd_service_name(self, app, env=None):
         full_name = f"{app}{'/' + env if env else ''}"
         full_name_systemd = run(['systemd-escape', '--suffix', 'service', full_name], check=True, capture_output=True, text=True).stdout.strip()
@@ -806,7 +805,7 @@ class CApp:
 
     def _check_dca_version(self, version):
         if version < self.capp_config['min_dca_version']:
-            raise ValueError(f"minmum DCA version required is {self.capp_config['min_dca_version']}, given {version}")
+            raise ValueError(f"minimum DCA version required is {self.capp_config['min_dca_version']}, given {version}")
 
     def _check_app_name(self, app):
         valid_app_name = r'[a-zA-Z][-_a-zA-Z0-9]+'
@@ -832,7 +831,7 @@ class CApp:
             try:
                 # convert openssh public key to PKCS#8
                 temp_pubkey_file = tmpd / 'public.pem'
-                with open(temp_pubkey_file, 'w') as f:
+                with open(temp_pubkey_file, 'w', encoding='utf8') as f:
                     f.write(run(['ssh-keygen', '-e', '-f', str(pubkey_file), '-m', 'pkcs8'], capture_output=True, text=True).stdout)
                 run([
                     'openssl', 'dgst',
@@ -863,7 +862,7 @@ class CApp:
             raise ValueError(f'{compose_file.name} is incorrect')
         svc_names = []
         limits = namedtuple('ResLimits', 'mem mem_avg cpu')({}, {}, {})
-        with open(compose_file) as f:
+        with open(compose_file, encoding='utf8') as f:
             dc = full_load(f)
         for svc_name, svc_def in dc.get('services', {}).items():
             svc_names.append(svc_name)
@@ -1071,7 +1070,7 @@ class CApp:
         printflush(f"Undeploying {app}/{target_env}…")
         target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
         try:
-            with open(target_dir / '.version') as f:
+            with open(target_dir / '.version', encoding='ascii') as f:
                 version = int(f.read().strip())
         except FileNotFoundError:
             version = 1
@@ -1079,7 +1078,7 @@ class CApp:
         systemd_svc = self._get_systemd_service_name(app, target_env)
         run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
         deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
-        with open(deps_file, 'r+') as f:
+        with open(deps_file, 'r+', encoding='utf8') as f:
             deps = [line.strip() for line in f if not line.startswith(f'{app}/{target_env}:')]
             f.seek(0)
             f.truncate()
@@ -1087,7 +1086,7 @@ class CApp:
             f.write('\n')
         run(['sudo', '/usr/local/bin/compose-dirs', 'update'], check=True, text=True)
         if target_dir.is_dir():
-            with open(target_dir / 'docker-compose.yml') as f:
+            with open(target_dir / 'docker-compose.yml', encoding='utf8') as f:
                 dc = full_load(f)
             vhostd_dir = Path('/var/docker-volumes/nginx-proxy/vhost.d')
             for svc in dc.get('services', {}).values():
@@ -1117,7 +1116,7 @@ class CApp:
         self.check_right(Right.APP_LIST)
         self.trace_action('apps', vars(args))
         deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
-        with open(deps_file) as f:
+        with open(deps_file, encoding='utf8') as f:
             deps = [line.strip() for line in f if search(r'/.+:', line)]
             for dep in sorted(deps):
                 app, env = dep.split(':')[0].split('/')
@@ -1208,7 +1207,7 @@ class CApp:
         if user_pkey_path.exists():
             raise ValueError(f"user '{user}' already exists")
         self.trace_action('users-add', vars(args))
-        with open(user_pkey_path, 'w') as f:
+        with open(user_pkey_path, 'w', encoding='utf8') as f:
             f.write(pkey)
         if first_user:
             rights = {right: ('.*', '.*') for right in Right.names()}
@@ -1222,7 +1221,7 @@ class CApp:
         if not user_pkey_path.exists():
             raise ValueError(f"user '{user}' does not exist")
         self.trace_action('users-listkeys', vars(args))
-        print(user_pkey_path.open().read())
+        print(user_pkey_path.open(encoding='utf8').read())
 
     def action_add_pkey(self, args):
         user = args.user
@@ -1233,9 +1232,9 @@ class CApp:
         if not user_pkey_path.exists():
             raise ValueError(f"user '{user}' does not exist")
         self.trace_action('users-addkey', vars(args))
-        pkeys = set(user_pkey_path.open().read().split('\n'))
+        pkeys = set(user_pkey_path.open(encoding='utf8').read().split('\n'))
         pkeys.add(pkey)
-        with open(user_pkey_path, 'w') as f:
+        with open(user_pkey_path, 'w', encoding='utf8') as f:
             f.write('\n'.join(pkeys))
 
     def action_delete_pkey(self, args):
@@ -1247,8 +1246,8 @@ class CApp:
         if not user_pkey_path.exists():
             raise ValueError(f"user '{user}' does not exist")
         self.trace_action('users-delkey', vars(args))
-        pkeys = set(user_pkey_path.open().read().split('\n')) - set((pkey, ))
-        with open(user_pkey_path, 'w') as f:
+        pkeys = set(user_pkey_path.open(encoding='utf8').read().split('\n')) - set((pkey, ))
+        with open(user_pkey_path, 'w', encoding='utf8') as f:
             f.write('\n'.join(pkeys))
 
     def action_delete_user(self, args):
@@ -1263,7 +1262,7 @@ class CApp:
     def _update_user_rights(self, user, rights):
         users = [f.name for f in self.users_dir.iterdir() if f.is_file()]
         if user in users:
-            with open(self.rights_dir / user, 'w') as f:
+            with open(self.rights_dir / user, 'w', encoding='utf8') as f:
                 for name, (env_regex, app_regex) in rights.items():
                     f.write(f'{name} {env_regex} {app_regex}\n')
 
@@ -1302,7 +1301,7 @@ class CApp:
             text=True,
         ).stdout.strip().split(' ')[1].split(':')[1]
         pubkey_file = self.pubkeys_dir / (sha256(fingerprint.encode('ascii')).hexdigest() + '.pub')
-        with open(pubkey_file, 'w') as f:
+        with open(pubkey_file, 'w', encoding='utf8') as f:
             f.write(pubkey)
         self.trace_action('pubkeys-add', vars(args))
 
@@ -1351,10 +1350,10 @@ class CApp:
     def action_delete_rights(self, args):
         self.check_right(Right.RIGHT_DELETE)
         user = args.user
-        old_rights = args.rights
+        rights_to_delete = args.rights
         rights = self.get_rights(user)
         self.trace_action('rights-delete', vars(args))
-        for name in old_rights:
+        for name in rights_to_delete:
             del rights[name]
         self._update_user_rights(user, rights)
 
