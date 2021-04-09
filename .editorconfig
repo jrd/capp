@@ -1,0 +1,21 @@
+root = true
+
+[*]
+end_of_line = lf
+indent_style = space
+indent_size = 4
+line_length = 200
+skip_gitignore = true
+multi_line_output = 3
+reverse_relative = true
+use_parentheses = true
+combine_star = true
+include_trailing_comma = true
+force_grid_wrap = 2
+
+[*.yml]
+indent_style = space
+indent_size = 2
+
+[Makefile]
+indent_style = tab

@@ -19,10 +19,14 @@ from tempfile import (
     mkdtemp,
     mkstemp,
 )
+
 try:
     from yaml import full_load
 except ImportError:
-    from sys import stderr, exit
+    from sys import (
+        exit,
+        stderr,
+    )
     print("PyYAML/python-yaml should be installed", file=stderr)
     exit(1)
 
@@ -306,12 +310,12 @@ http {
         if server_file.is_file():
             info(f"  '{server_file.name}' is present in 'proxy' directory")
             with open(server_file) as f:
-                nginx_conf += '\n'.join([' ' * 4 + l for l in f.read().split('\n')])
+                nginx_conf += '\n'.join([' ' * 4 + line for line in f.read().split('\n')])
         nginx_conf += '\n    location / {\n'
         if location_file.is_file():
             info(f"  '{location_file.name}' is present in 'proxy' directory")
             with open(location_file) as f:
-                nginx_conf += '\n'.join([' ' * 6 + l for l in f.read().split('\n')])
+                nginx_conf += '\n'.join([' ' * 6 + line for line in f.read().split('\n')])
         nginx_conf += ' ' * 4 + '}\n' + ' ' * 2 + '}\n'
     nginx_conf += '}'
     _, nginx_conf_path = mkstemp(text=True)

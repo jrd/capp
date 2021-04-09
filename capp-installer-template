@@ -1,11 +1,21 @@
 #!/bin/bash
-CAPP_VER=to_replace
-COMPOSE_SYSTEMD_VER=1.2.0
-def_cont_mem='10G'
 set -e
+CAPP_VER=to_replace
+COMPOSE_SYSTEMD_VER=1.3.0
+def_min_dca_ver=2
+def_cont_mem='10G'
+def_cont_proc=1000
+usage() {
+    echo "$0 default_hostname default_email [min_dca_ver=$def_min_dca_ver] [container_max_memory_size=$def_cont_mem] [container_max_process=$def_cont_proc] [nohttps]" >&2
+    echo "  container_max_memory_size should be expressed with M or G units" >&2
+    exit ${1:-1}
+}
 if [ "$1" = "-v" ] || [ "$1" = "--version" ]; then
     echo "$CAPP_VER"
     exit 0
+fi
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    usage 0
 fi
 if [ $(id -u) -ne 0 ]; then
     echo "Root required" >&2
@@ -19,42 +29,41 @@ for bin in useradd usermod base64 curl docker-compose sudo tar unxz; do
 done
 me=$(readlink -f "$0")
 offset=$(($(sed -rn '/#{10}/=' "$me") + 1))
-usage() {
-    echo "$0 default_hostname default_email [container_max_memory_size=$def_cont_mem] [nohttps]" >&2
-    echo "  container_max_memory_size should be expressed with M or G units" >&2
-    exit 1
-}
 dh="$1"
 [ -n "$dh" ] && shift || usage
 de="$1"
 [ -n "$dh" ] && shift || usage
+min_dca_ver=
 cont_mem=
+cont_proc=
 nohttps=0
 while [ -n "$1" ]; do
     p="$1"
     shift
-    case "$p" in
-        nohttps)
-            nohttps=1
-            ;;
-        *M|*G)
-            if [ -z "$cont_mem" ]; then
-                cont_mem="$p"
-            else
-                usage
-            fi
-            ;;
-        *)
-            usage
-            ;;
-    esac
+    if [ -z "$min_dca_ver" ]; then
+        echo "$p" | grep -E -q '^[0-9](\.[0-9]+)?$' || usage
+        min_dca_ver="$p"
+    elif [ -z "$cont_mem" ]; then
+        echo "$p" | grep -E -q '^[0-9]+[MG]$' || usage
+        cont_mem="$p"
+    elif [ -z "$cont_proc" ]; then
+        echo "$p" | grep -E -q '^[0-9]+$' || usage
+    elif [ "$p" = "nohttps" ]; then
+        nohttps=1
+    else
+        usage
+    fi
 done
+[ -n "$min_dca_ver" ] || min_dca_ver=$def_min_dca_ver
 [ -n "$cont_mem" ] || cont_mem=$def_cont_mem
+[ -n "$cont_proc" ] || cont_proc=$def_cont_proc
 cat > /etc/capp.conf <<EOF
+min_dca_version=${min_dca_ver}
 max_mem_size=${cont_mem}
+max_proc=${cont_proc}
 default_hostname=${dh}
 EOF
-mkdir -p /etc/capp/users /etc/capp/rights /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy}
+mkdir -p /etc/capp/users /etc/capp/pubkeys /etc/capp/rights /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy}
 tmpdir=$(mktemp -d)
 cd $tmpdir
 curl -Ls https://github.com/jrd/compose-systemd/archive/v${COMPOSE_SYSTEMD_VER}.tar.gz | tar xzf -
@@ -64,8 +73,8 @@ cp compose-systemd-${COMPOSE_SYSTEMD_VER}/compose-dirs /usr/local/bin/
 ln -sf $(which docker-compose) /usr/local/bin/dc
 mkdir -p /var/docker-volumes/nginx-proxy/{vhost.d,certs} /etc/compose /home/deploy/dca
 id -u compose >/dev/null 2>&1 || useradd --home-dir /etc/compose --no-create-home --user-group --shell /usr/sbin/nologin -c "Compose" -l compose
-chown :compose /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/rights
-chmod g+w /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/rights
+chown :compose /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/pubkeys /etc/capp/rights
+chmod g+w,o=rX /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/pubkeys /etc/capp/rights
 cp -r proxy dca /etc/compose/
 if [ "$nohttps" -eq 1 ]; then
     # delete the letsencrypt service
@@ -78,7 +87,7 @@ fi
 sed -ri "s/dca:1000:1000/dca:$(id -u compose):$(id -g compose)/" /etc/compose/dca/docker-compose.yml
 mkdir -p /usr/local/bin
 cp capp verify_dca.py get_deploy_keys /usr/local/bin/
-chown compose: /usr/local/bin/capp
+chown :compose /usr/local/bin/capp
 cat > /etc/compose/proxy/.env <<EOF
 DEFAULT_HOST=$dh
 DEFAULT_EMAIL=$de
@@ -96,7 +105,7 @@ fi
 chown -R compose: ~compose
 id -u deploy >/dev/null 2>&1 || useradd --no-create-home --user-group --password '*' -c "Deploy" deploy
 cat > ~deploy/capp <<'EOF'
-#!/bin/env python3
+#!/usr/bin/env python3
 from os import environ, execvpe
 from shlex import split
 from sys import exit
@@ -110,7 +119,7 @@ if 'SHELL' not in environ:
 execvpe('sudo', args, environ)
 exit(1)
 EOF
-chmod +x ~deploy/capp
+chmod u=rx,g=rx,o= ~deploy/capp
 chmod g+w ~deploy/dca
 chown -R deploy: ~deploy
 chown -R :compose ~deploy/dca
@@ -118,13 +127,13 @@ grep -q '^PermitUserEnvironment yes' /etc/ssh/sshd_config || sed -ri '/^#PermitU
 grep -q '^Match User deploy' /etc/ssh/sshd_config && ! grep -q '^ *AuthorizedKeysCommand' /etc/ssh/sshd_config && sed -ri '/^Match User deploy/,/^.*AuthorizedKeys.*/d' /etc/ssh/sshd_config
 grep -q '^Match User deploy' /etc/ssh/sshd_config || cat >> /etc/ssh/sshd_config <<EOF
 Match User deploy
-	AllowAgentForwarding no
+        AllowAgentForwarding no
         AllowTcpForwarding no
         X11Forwarding no
         PermitTunnel no
         DisableForwarding yes
         PasswordAuthentication no
-	ForceCommand /home/deploy/capp
+        ForceCommand /home/deploy/capp
         AuthorizedKeysFile /dev/null
         AuthorizedKeysCommand /usr/local/bin/get_deploy_keys
         AuthorizedKeysCommandUser compose
@@ -138,10 +147,11 @@ chmod g+w /var/log/capp.log
 groups compose | grep -q '\<docker\>' || usermod -a -G docker compose
 groups compose | grep -q '\<systemd-journal\>' || usermod -a -G systemd-journal compose
 groups compose | grep -q '\<deploy\>' || usermod -a -G deploy compose
+systemctl_path=$(which systemctl)
 cat > /etc/sudoers.d/compose <<EOF
 # Allow members of compose group to execute compose-dirs command
 Cmnd_Alias COMPOSE_DIRS = /usr/local/bin/compose-dirs
-Cmnd_Alias COMPOSE_SVC = /usr/bin/systemctl start compose@*, /usr/bin/systemctl stop compose@*, /usr/bin/systemctl restart compose@*
+Cmnd_Alias COMPOSE_SVC = $systemctl_path start compose@*, $systemctl_path stop compose@*, $systemctl_path restart compose@*, $systemctl_path status compose@*
 Cmnd_Alias CAPP_HOOKS = /etc/capp/hooks.d/pre_deploy/*, /etc/capp/hooks.d/post_deploy/*, /etc/capp/hooks.d/pre_undeploy/*, /etc/capp/hooks.d/post_undeploy/*
 %compose   ALL= NOPASSWD: COMPOSE_DIRS, COMPOSE_SVC, CAPP_HOOKS
 EOF
@@ -152,6 +162,7 @@ Cmnd_Alias CAPP_CMD = /usr/local/bin/capp
 %deploy   ALL=(compose) NOPASSWD: CAPP_CMD
 EOF
 chmod u=r,g=r,o= /etc/sudoers.d/{compose,deploy}
+set +e
 cd /etc/compose/dca
 docker-compose pull
 cd /etc/compose/proxy
