@@ -14,7 +14,7 @@ services:
       - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
   docker-gen:
-    image: jrdasm/docker-gen:0.7.5
+    image: jwilder/docker-gen:0.7.5
     container_name: docker-gen
     environment:
       - "DEFAULT_HOST=${DEFAULT_HOST}"
@@ -27,7 +27,7 @@ services:
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
       - nginx-conf:/etc/nginx/conf.d:rw
   letsencrypt:
-    image: jrcs/letsencrypt-nginx-proxy-companion:2.0.2
+    image: nginxproxy/acme-companion:2.1
     container_name: le-gen
     environment:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"
