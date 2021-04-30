@@ -287,6 +287,19 @@ class CApp:
         sp.add_argument('--verbose', action='store_true',
                         help="Show status while listing")
         sp.set_defaults(func=self.action_apps)
+        # build
+        descr = (
+            "Build (and pull) the application services images."
+            "\nThe application should already exist on this node."
+        )
+        epilog = "Required rights: APP_START, START_{env} and START_APPS regex list matching the app name"
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.START.name} with env and app regexes matching the environment name and app name accordingly"
+        )
+        sp = sps.add_parser('build', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        add_app_env_args(sp)
+        sp.set_defaults(func=self.action_build)
         # start
         descr = (
             "Start the application specified."
@@ -723,6 +736,9 @@ class CApp:
             f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n{orig_dotenv_content}\n")
         with open(target_dir / '.version', 'w', encoding='ascii') as f:
             f.write(f"{version}\n")
+        with open(target_dir / '.metadata', 'w', encoding='utf8') as f:
+            for key, value in metadata.items():
+                f.write(f"{key}={value}\n")
         if 'networks' not in dc:
             dc['networks'] = {}
         dc['networks']['proxy'] = {
@@ -770,7 +786,8 @@ class CApp:
             svc_def['cpu_shares'] = limits.cpu[svc_name] * 1024 // 4
         with open(target_dir / 'docker-compose.yml', 'w', encoding='utf8') as f:
             dump(dc, f)
-        run(['docker-compose', '-f', str(target_dir / 'docker-compose.yml'), 'pull', '--ignore-pull-failures', '--quiet'], text=True)
+        self._pull_images(target_dir)
+        self._build_images(target_dir)
         deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
         with open(deps_file, 'r+', encoding='utf8') as f:
             deps = [line.strip() for line in f if not line.startswith(f'{app}/{target_env}:')]
@@ -1038,10 +1055,15 @@ class CApp:
         for hook_file in self._iter_hooks('undeploy', 'post'):
             self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
 
-    def _pull_image(self, target_dir):
+    def _pull_images(self, target_dir):
         printflush(end='')
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
-            run(['docker-compose', 'pull', '--ignore-pull-failures'], cwd=target_dir, text=True)
+            run(['docker-compose', 'pull', '--ignore-pull-failures', '--quiet'], cwd=target_dir, text=True)
+
+    def _build_images(self, target_dir):
+        printflush(end='')
+        if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
+            run(['docker-compose', 'build', '--pull', '--quiet'], cwd=target_dir, text=True)
 
     def _load_images(self, image_files):
         printflush(end='')
@@ -1126,6 +1148,16 @@ class CApp:
                     raw_status = run(['systemctl', 'status', '--no-pager', svc], env={'SYSTEMD_COLORS': '1'}, capture_output=True, text=True).stdout
                     status = ''.join([line.replace('Active: ', '') for line in raw_status.split('\n') if search(r'Active:', line)])
                     printflush(status)
+
+    def action_build(self, args):
+        app = args.app
+        target_env = args.env
+        self._check_app_name_target_env(app, target_env)
+        self.check_right(Right.START, app=app, env=target_env)
+        self.trace_action('build', vars(args))
+        target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
+        self._pull_images(target_dir)
+        self._build_images(target_dir)
 
     def action_start(self, args):
         app = args.app

@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+Next
+----
+
+- `build` command to force build and pull application services.
+
 version 2.3.1
 -------------
 - Let’s encrypt companion update
