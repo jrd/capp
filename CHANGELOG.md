@@ -5,6 +5,7 @@ Next
 ----
 
 - `build` command to force build and pull application services.
+- better `exec` command, with multiple arguments supported and you can inject environment variables, change the working directory or the current user.
 
 version 2.3.1
 -------------

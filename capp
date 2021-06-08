@@ -147,7 +147,7 @@ class Unit(Enum):
 Env = EnumNames('Env', ('dev', 'integ', 'staging', 'demo', 'prod'))
 Right = EnumNames('Right', (
     'DCA_READ', 'DCA_WRITE', 'APP_LIST',
-    'DEPLOY', 'START', 'STOP', 'STATUS', 'LOGS', 'EXEC',
+    'DEPLOY', 'START', 'STOP', 'STATUS', 'LOGS', 'EXEC', 'EXEC_USER',
     'USER_LIST', 'USER_ADD', 'USER_CHANGE', 'USER_DELETE',
     'PKEY_LIST', 'PKEY_ADD', 'PKEY_DELETE',
     'RIGHT_LIST', 'RIGHT_ADD', 'RIGHT_DELETE',
@@ -374,12 +374,18 @@ class CApp:
         epilog = (
             "Required rights:"
             f"\n- {Right.EXEC.name} with env and app regexes matching the environment name and app name accordingly"
+            """\n\nSpaces arguments should be encapsulated with '"..."'."""
+            "\nIf you have any argument that starts with a dash (-), start your command with double dashes (--)."
+            """\nExample: capp exec -u test -w /app app prod front -- bash -c '"ls -lh"'"""
         )
         sp = sps.add_parser('exec', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         add_app_env_args(sp)
         sp.add_argument('service', metavar='SERVICE', help="application service name")
-        sp.add_argument('--args', nargs='?', const=None, default='/bin/sh', dest='args', metavar='ARGS',
-                        help="Any arguments to exec for the service. Default to /bin/sh")
+        sp.add_argument('-u', dest='execuser', metavar='USER', help=f"Run the command as another user ({Right.EXEC_USER.name} right required)")
+        sp.add_argument('-e', nargs=1, action='append', dest='execenvs', metavar='KEY=VALUE', help="Set environment variables for the command")
+        sp.add_argument('-w', dest='execworkdir', metavar='DIRECTORY', help="Path to workdir directory for the command")
+        sp.add_argument('args', nargs='*', default=['/bin/sh'], metavar='ARGS',
+                        help="Any arguments to exec for the service. Default to /bin/sh.")
         sp.set_defaults(func=self.action_exec)
         # users
         descr = "User accounts management commands."
@@ -1215,7 +1221,18 @@ class CApp:
         self.check_right(Right.EXEC, app=app, env=target_env)
         self.trace_action('exec', vars(args))
         target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
-        run(['docker-compose', 'exec', args.service, args.args], cwd=target_dir)
+        cmd = ['docker-compose', 'exec']
+        if args.execuser:
+            self.check_right(Right.EXEC_USER, app=app, env=target_env)
+            cmd.extend(['-u', args.execuser])
+        if args.execenvs:
+            for kv in args.execenvs:
+                cmd.extend(['-e', kv[0]])
+        if args.execworkdir:
+            cmd.extend(['-w', args.execworkdir])
+        cmd.append(args.service)
+        cmd.extend(args.args)
+        run(cmd, cwd=target_dir)
 
     def action_list_users(self, args):
         self.check_right(Right.USER_LIST)
