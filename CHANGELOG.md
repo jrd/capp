@@ -1,9 +1,8 @@
 CHANGELOG
 =========
 
-Next
-----
-
+version 2.4.0
+-------------
 - `build` command to force build and pull application services.
 - better `exec` command, with multiple arguments supported and you can inject environment variables, change the working directory or the current user.
 
