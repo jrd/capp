@@ -1,6 +1,10 @@
 CHANGELOG
 =========
 
+Next
+----
+- Do not use cache when using `build` command.
+
 version 2.4.0
 -------------
 - `build` command to force build and pull application services.

@@ -1066,10 +1066,15 @@ class CApp:
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
             run(['docker-compose', 'pull', '--ignore-pull-failures', '--quiet'], cwd=target_dir, text=True)
 
-    def _build_images(self, target_dir):
+    def _build_images(self, target_dir, quiet=True, use_cache=True):
         printflush(end='')
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
-            run(['docker-compose', 'build', '--pull', '--quiet'], cwd=target_dir, text=True)
+            cmd = ['docker-compose', 'build', '--pull']
+            if quiet:
+                cmd.append('--quiet')
+            if not use_cache:
+                cmd.append('--no-cache')
+            run(cmd, cwd=target_dir, text=True)
 
     def _load_images(self, image_files):
         printflush(end='')
@@ -1163,7 +1168,7 @@ class CApp:
         self.trace_action('build', vars(args))
         target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
         self._pull_images(target_dir)
-        self._build_images(target_dir)
+        self._build_images(target_dir, quiet=False, use_cache=False)
 
     def action_start(self, args):
         app = args.app
