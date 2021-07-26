@@ -936,19 +936,18 @@ class CApp:
             'user',
             'working_dir',
         )
-        _volume_conditions = lambda vol_src: (  # noqa: E731
-            vol_src,
-            not match(r'[a-zA-Z]', vol_src),
-            not vol_src.startswith('./'),
+        _volume_allowed_conditions = lambda vol_src: (  # noqa: E731
+            not match(r'[a-zA-Z]', vol_src),  # allow named volume starting with a letter
+            not vol_src.startswith('./'),  # allow relative path
         )
         if privileged:
             allowed_keys += ('ports',)
-            volume_conditions = lambda vol_src: _volume_conditions(vol_src) + (  # noqa: E731
-                vol_src != '/var/run/docker.sock',
-                not vol_src.startswith('/var/docker-volumes/nginx-proxy/certs'),
+            volume_allowed_conditions = lambda vol_src: (  # noqa: E731
+                *_volume_allowed_conditions(vol_src),
+                not vol_src.startswith('/'),  # allow absolute path
             )
         else:
-            volume_conditions = _volume_conditions
+            volume_allowed_conditions = _volume_allowed_conditions
         for key in (definition or {}).keys():
             if key not in allowed_keys:
                 raise ValueError(f"key {key}, defined for {name} is not allowed in services section")
@@ -992,13 +991,12 @@ class CApp:
                 volumes = definition[key]
                 for volume in volumes:
                     if isinstance(volume, str):
-                        vol_src = volume.split(':')[0] if ':' in volume else volume
-                        if all(volume_conditions(vol_src)):
-                            raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
+                        vol_parts = volume.split(':') if ':' in volume else []
+                        vol_src = vol_parts[0] if vol_parts[1].lower() not in ('ro', 'rw') else ''
                     else:
                         vol_src = volume.get('source', '')
-                        if all(volume_conditions(vol_src)):
-                            raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
+                    if vol_src and all(volume_allowed_conditions(vol_src)):
+                        raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
 
     def _verify_compose_volume(self, name, definition):
         for key in (definition or {}).keys():
