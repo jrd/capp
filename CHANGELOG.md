@@ -4,6 +4,8 @@ CHANGELOG
 Next
 ----
 - Do not use cache when using `build` command.
+- Fix `undeploy` command on non-existant app/env.
+- Fix parsing metadata version on `undeploy`.
 
 version 2.4.0
 -------------
