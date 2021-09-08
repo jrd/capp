@@ -1,8 +1,12 @@
 CHANGELOG
 =========
 
-Next
-----
+version 2.5.1
+-------------
+- Update image versions
+
+version 2.5.0
+-------------
 - Do not use cache when using `build` command.
 - Fix `undeploy` command on non-existant app/env.
 - Fix parsing metadata version on `undeploy`.

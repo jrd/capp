@@ -1,4 +1,4 @@
 capp-installer
-proxy/nginx.tmpl
+proxy/gen/nginx.tmpl
 src.tar.xz
 __pycache__/

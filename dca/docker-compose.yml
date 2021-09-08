@@ -4,7 +4,7 @@ services:
     build:
       context: ./build
       args:
-        panubo_ver: 1.3.0
+        panubo_ver: 1.4.0
     image: sshd-scp
     environment:
       - "SCP_MODE=true"

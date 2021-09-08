@@ -1,7 +1,8 @@
 version: '2.4'
 services:
   nginx:
-    image: nginx:alpine
+    build:
+      context: nginx
     container_name: nginx-proxy
     networks:
       - "network"
@@ -14,20 +15,21 @@ services:
       - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
   docker-gen:
-    image: jwilder/docker-gen:0.7.5
+    build:
+      context: gen
     container_name: docker-gen
     environment:
       - "DEFAULT_HOST=${DEFAULT_HOST}"
     networks:
       - "network"
     volumes:
-      - ./nginx.tmpl:/etc/docker-gen/templates/nginx.tmpl:ro
       - /var/run/docker.sock:/tmp/docker.sock:ro
       - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
       - nginx-conf:/etc/nginx/conf.d:rw
   letsencrypt:
-    image: nginxproxy/acme-companion:2.1
+    build:
+      context: le
     container_name: le-gen
     environment:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"
