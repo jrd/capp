@@ -28,6 +28,7 @@ Then add temporary the IP to your `/etc/hosts` file:
     IP   test.capp myapp.test.capp anysubdomain.test.capp
 EOF
 trap 'docker rmi capptest' EXIT
+trap 'docker kill capptest; docker rmi capptest' EXIT
 docker run \
     --name capptest \
     --rm \
@@ -41,5 +42,4 @@ docker run \
 echo "Wait for systemd to start"
 sleep 1
 docker exec -t capptest /root/capp-installer test.capp mail@example.com "$@"
-trap 'docker kill capptest; docker rmi capptest' EXIT
 docker logs -f capptest

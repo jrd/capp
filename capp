@@ -57,7 +57,7 @@ from yaml import (
 
 from verify_dca import verify_checksum
 
-__version__ = (2, 5, 0)
+__version__ = (2, 6, 0)
 
 
 def printflush(*args, **kwargs):
@@ -603,6 +603,7 @@ class CApp:
         return sorted(hooks)
 
     def _run_hook(self, hook_file, app, target_env, version, compose_file, target_dir):
+        printflush(f"Run hook {hook_file}")
         run(['/usr/bin/sudo', str(hook_file), app, target_env, str(version), str(compose_file), str(target_dir)], stdin=0, check=True, text=True)
 
     def _to_bytes(self, value_unit):
@@ -802,12 +803,16 @@ class CApp:
             f.truncate()
             f.write('\n'.join(deps))
             f.write('\n')
-        run(['sudo', '/usr/local/bin/compose-dirs', 'update'], check=True, text=True)
+        printflush("Update systemd")
+        run(['sudo', '/usr/local/bin/compose-dirs', 'update', f'{app}/{target_env}'], check=True, text=True)
         systemd_svc = self._get_systemd_service_name(app, target_env)
         if args.start:
+            printflush("Restart application")
             run(['sudo', 'systemctl', 'restart', systemd_svc], check=True, text=True)
         elif run(['systemctl', 'is-active', systemd_svc], capture_output=True).returncode == 0:
+            printflush("Stop application")
             run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
+        printflush("Cleaning dangling images…")
         run(['docker', 'image', 'prune', '-f'], text=True)
         self._post_deploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
 
@@ -875,7 +880,7 @@ class CApp:
         signature = b64decode(signature_base64)
         for pubkey_file in (f for f in self.pubkeys_dir.iterdir() if f.is_file() and f.suffix == '.pub'):
             if self._verify_signature(signature, compose_file, pubkey_file):
-                printflush("signature: 'OK'")
+                printflush("Signature: 'OK'")
                 break
         else:
             raise ValueError("metadata signature mismatch")
@@ -1060,13 +1065,13 @@ class CApp:
             self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
 
     def _pull_images(self, target_dir):
-        printflush(end='')
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
+            printflush("Pulling images…")
             run(['docker-compose', 'pull', '--ignore-pull-failures', '--quiet'], cwd=target_dir, text=True)
 
     def _build_images(self, target_dir, quiet=True, use_cache=True):
-        printflush(end='')
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
+            printflush("Building images…")
             cmd = ['docker-compose', 'build', '--pull']
             if quiet:
                 cmd.append('--quiet')
@@ -1075,14 +1080,16 @@ class CApp:
             run(cmd, cwd=target_dir, text=True)
 
     def _load_images(self, image_files):
-        printflush(end='')
         for image_file in image_files:
+            printflush(f"Loading image {image_file}…")
             run(f'zcat "{str(image_file)}" | docker image load', shell=True, check=True, text=True)
-        run(['docker', 'image', 'prune', '-f'], text=True)
+        if image_files:
+            printflush("Cleaning dangling images…")
+            run(['docker', 'image', 'prune', '-f'], text=True)
 
     def _clean_volumes(self, target_dir):
-        printflush(end='')
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
+            printflush("Cleaning volumes…")
             run(['docker-compose', 'down', '-v'], cwd=target_dir, text=True)
 
     def _copy_context(self, src_dir, dest_dir):
@@ -1117,7 +1124,8 @@ class CApp:
             f.truncate()
             f.write('\n'.join(deps))
             f.write('\n')
-        run(['sudo', '/usr/local/bin/compose-dirs', 'update'], check=True, text=True)
+        printflush("Update systemd")
+        run(['sudo', '/usr/local/bin/compose-dirs', 'update', f'{app}/{target_env}'], check=True, text=True)
         if target_dir.is_dir():
             with open(target_dir / 'docker-compose.yml', encoding='utf8') as f:
                 dc = full_load(f)
@@ -1135,6 +1143,7 @@ class CApp:
                         if location_nginx_config_file.is_file():
                             location_nginx_config_file.unlink()
             dc_down_args = '-v --rmi all' if args.all else '--rmi local'
+            printflush("Destroying application…")
             run(f"docker-compose down {dc_down_args} 2>&1 | grep -v ^Network | grep -v '^Removing network'", shell=True, cwd=target_dir, text=True)
             self._post_undeploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
             rmtree(target_dir, ignore_errors=True)
@@ -1205,7 +1214,7 @@ class CApp:
         self.check_right(Right.STATUS, app=app, env=target_env)
         self.trace_action('status', vars(args))
         svc = self._get_systemd_service_name(app, target_env)
-        execlp('systemctl', 'systemctl', 'status', '--no-pager', svc)
+        execlp('systemctl', 'systemctl', 'status', '--no-pager', '--lines=0', svc)
 
     def action_logs(self, args):
         app = args.app

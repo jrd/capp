@@ -1,10 +1,12 @@
 CHANGELOG
 =========
 
-Next
+version 2.6.0
 -------------
 - Updated image versions.
 - `capp` can be tested in docker.
+- `compose-dirs` updated to version `1.4.0`.
+- More verbose tasks on `deploy`/`undeploy`.
 
 version 2.5.0
 -------------
