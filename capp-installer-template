@@ -167,9 +167,9 @@ chmod u=r,g=r,o= /etc/sudoers.d/{compose,deploy}
 set +e
 (cd /etc/compose/dca; docker-compose pull)
 (cd /etc/compose/proxy/gen; ./get-nginx-tmpl; cd ..; docker-compose pull)
-rm -rf "$tmpdir"
 /usr/local/bin/compose-dirs install
 /usr/local/bin/compose-dirs update
 /usr/local/bin/compose-dirs start
+rm -rf "$tmpdir"
 exit 0
 ##########
