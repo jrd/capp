@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+version 2.6.1
+-------------
+- Fix `rmdir` that was too soon in the installer
+- Updated image versions (`le-gen` still need an still-unreleased upgraded version).
+
 version 2.6.0
 -------------
 - Updated image versions.

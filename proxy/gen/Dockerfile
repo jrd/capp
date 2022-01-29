@@ -1,4 +1,4 @@
-FROM jwilder/docker-gen:0.7.7
+FROM jwilder/docker-gen:0.8.2
 RUN apk update && apk upgrade
 COPY ./docker-gen-wrapper /usr/local/bin/docker-gen-wrapper
 COPY ./nginx.tmpl /etc/docker-gen/templates/nginx.tmpl
