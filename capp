@@ -19,6 +19,7 @@ from os import (
 from pathlib import Path
 from pwd import getpwuid
 from re import (
+    compile,
     match,
     search,
     sub,
@@ -816,12 +817,28 @@ class CApp:
         run(['docker', 'image', 'prune', '-f'], text=True)
         self._post_deploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
 
+    def _check_vhost(self, vhost):
+        try:
+            hostname = vhost.encode('idna').decode()
+            if len(hostname) > 255:
+                raise ValueError
+            dash_doesn_t_match_next = '(?!-)'
+            label = '[-_a-zA-Z0-9]{1,63}'
+            not_preceeded_by_dash = '(?<!-)'
+            allowed_chars = compile(f'{dash_doesn_t_match_next}{label}{not_preceeded_by_dash}$')
+            if all(allowed_chars.match(label) for label in hostname.split('.')):
+                return hostname
+            else:
+                raise ValueError
+        except (UnicodeError, ValueError):
+            raise ValueError(f"vhost {vhost} is not a valid hostname")
+
     def _build_full_hostnames(self, metadata, vhost_suffix, svc_name):
         return (
-            [base_vhost.strip() + vhost_suffix for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')]
+            [self._check_vhost(base_vhost.strip() + vhost_suffix) for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')]
             if f'{svc_name}_base_vhost' in metadata else []
         ) + (
-            [vhost.strip() for vhost in metadata[f'{svc_name}_vhost'].split(',')]
+            [self._check_vhost(vhost.strip()) for vhost in metadata[f'{svc_name}_vhost'].split(',')]
             if f'{svc_name}_vhost' in metadata else []
         )
 
