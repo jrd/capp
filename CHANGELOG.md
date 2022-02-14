@@ -1,6 +1,10 @@
 CHANGELOG
 =========
 
+Next
+----
+- Check for `vhost` validity before deploying.
+
 version 2.6.2
 -------------
 - Updated `le-gen` image versions for security reason (version `2.1.3` is issue-free).
