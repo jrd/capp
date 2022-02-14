@@ -19,6 +19,7 @@ services:
       context: gen
     container_name: docker-gen
     environment:
+      - "NGINX_PROXY_CONTAINER=nginx-proxy"
       - "DEFAULT_HOST=${DEFAULT_HOST}"
     networks:
       - "network"
@@ -26,7 +27,7 @@ services:
       - /var/run/docker.sock:/tmp/docker.sock:ro
       - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
       - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
-      - nginx-conf:/etc/nginx/conf.d:rw
+      - nginx-conf:/etc/proxy-conf.d:rw
   letsencrypt:
     build:
       context: le

@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+SOURCE=/etc/nginx/conf.d/default.conf
+DEST=/etc/proxy-conf.d/default.conf
+# check $SOURCE is valid else bail out
+nginx -t
+cp "$SOURCE" "$DEST"
+docker kill -s HUP "$NGINX_PROXY_CONTAINER"
