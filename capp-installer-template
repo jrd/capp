@@ -50,6 +50,7 @@ while [ -n "$1" ]; do
         cont_mem="$p"
     elif [ -z "$cont_proc" ]; then
         echo "$p" | grep -E -q '^[0-9]+$' || usage
+        cont_proc="$p"
     elif [ "$p" = "nohttps" ]; then
         nohttps=1
     else
