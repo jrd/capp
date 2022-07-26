@@ -58,7 +58,7 @@ from yaml import (
 
 from verify_dca import verify_checksum
 
-__version__ = (2, 6, 2)
+__version__ = (2, 7, 0)
 
 
 def printflush(*args, **kwargs):
