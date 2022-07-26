@@ -942,6 +942,7 @@ class CApp:
             'image',
             'init',
             'labels',
+            'logging',
             'networks',
             'pid',
             'scale',
