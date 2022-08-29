@@ -5,9 +5,14 @@ COMPOSE_SYSTEMD_VER=v1.4.0
 def_min_dca_ver=2
 def_cont_mem='10G'
 def_cont_proc=1000
+me=$(readlink -f "$0")
+offset=$(($(sed -rn '/#{10}/=' "$me") + 1))
 usage() {
     echo "$0 default_hostname default_email [min_dca_ver=$def_min_dca_ver] [container_max_memory_size=$def_cont_mem] [container_max_process=$def_cont_proc] [nohttps]" >&2
     echo "  container_max_memory_size should be expressed with M or G units" >&2
+    echo "-v|--version    show the version" >&2
+    echo "-h|--help       show this help message" >&2
+    echo "-e|--extract    extract the inner archive to src.tar.xz"
     # shellcheck disable=SC2086
     exit ${1:-1}
 }
@@ -17,6 +22,10 @@ if [ "$1" = "-v" ] || [ "$1" = "--version" ]; then
 fi
 if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     usage 0
+fi
+if [ "$1" = "-e" ] || [ "$1" = "--extract" ]; then
+    tail -n+$offset "$me" | base64 -d > src.tar.xz
+    exit 0
 fi
 # shellcheck disable=SC2046
 if [ $(id -u) -ne 0 ]; then
@@ -29,8 +38,6 @@ for bin in useradd usermod base64 curl docker-compose sudo tar unxz; do
         exit 1
     fi
 done
-me=$(readlink -f "$0")
-offset=$(($(sed -rn '/#{10}/=' "$me") + 1))
 dh="$1"
 [ -n "$dh" ] && shift || usage
 de="$1"
@@ -85,15 +92,17 @@ if [ "$nohttps" -eq 1 ]; then
     # do not bind the 443 port on the host
     sed -ri '/:443/d' /etc/compose/proxy/docker-compose.yml
     # do not redirect http access to https
-    sed -ri '/Env\.HTTPS_METHOD/s/redirect/nohttps/' /etc/compose/proxy/nginx.tmpl
+    sed -ri '/Env\.HTTPS_METHOD/s/redirect/nohttps/' /etc/compose/proxy/gen/nginx.tmpl
 fi
 sed -ri "s/dca:1000:1000/dca:$(id -u compose):$(id -g compose)/" /etc/compose/dca/docker-compose.yml
 mkdir -p /usr/local/bin
 cp capp verify_dca.py get_deploy_keys /usr/local/bin/
 chown :compose /usr/local/bin/capp
+DOCKER_GEN_VERSION=$(/etc/compose/proxy/gen/docker-gen --version)
 cat > /etc/compose/proxy/.env <<EOF
 DEFAULT_HOST=$dh
 DEFAULT_EMAIL=$de
+DOCKER_GEN_VERSION=${DOCKER_GEN_VERSION}
 EOF
 if [ -f /etc/compose/compose.deps ]; then
     for svc in proxy dca; do
@@ -166,8 +175,12 @@ Cmnd_Alias CAPP_CMD = /usr/local/bin/capp
 EOF
 chmod u=r,g=r,o= /etc/sudoers.d/{compose,deploy}
 set +e
-(cd /etc/compose/dca; docker-compose pull)
-(cd /etc/compose/proxy/gen; ./get-nginx-tmpl; cd ..; docker-compose pull)
+(
+    cd /etc/compose/dca
+    docker-compose build --pull --no-cache
+    cd ../proxy
+    docker-compose build --pull --no-cache
+)
 /usr/local/bin/compose-dirs install
 /usr/local/bin/compose-dirs update
 /usr/local/bin/compose-dirs start

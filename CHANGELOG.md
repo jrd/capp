@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+version 2.8.0
+-------------
+- Fix `max_proc` not being taken into account in the installer
+- Security updates and docker-gen build and patch from source
+
 version 2.7.0
 -------------
 - Check for `vhost` validity before deploying.
