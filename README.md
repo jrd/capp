@@ -16,7 +16,7 @@ The scripts rely on a system running **systemd**.
 Installation
 ------------
 
-- Create the installer: `make`
+- Create the installer: `make installer`
 - Copy the `capp-installer` file to your host target.
 - Execute it with **root privilege** and by specifying the **default hostname** and **email address** to use for the `proxy` (email is used for *let's encrypt*):  
 `capp-installer example.com user@example.com`

@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-make
+make installer
 (
     cp capp-installer test/
     cd test
@@ -27,7 +27,6 @@ To test your application, get the container’s IP with `IP=$(docker inspect cap
 Then add temporary the IP to your `/etc/hosts` file:
     IP   test.capp myapp.test.capp anysubdomain.test.capp
 EOF
-trap 'docker rmi capptest' EXIT
 trap 'docker kill capptest; docker rmi capptest' EXIT
 docker run \
     --name capptest \
@@ -42,4 +41,8 @@ docker run \
 echo "Wait for systemd to start"
 sleep 1
 docker exec -t capptest /root/capp-installer test.capp mail@example.com "$@"
+echo "capptest IP is $(docker inspect capptest|sed -rn '/"IPAddress"/{s/.*: "(.+)",/\1/;p;q}')"
+echo "please temporarily add '$(docker inspect capptest|sed -rn '/"IPAddress"/{s/.*: "(.+)",/\1/;p;q}') test.capp myapp.test.capp' to your /etc/hosts file"
+echo ""
+echo "hit Ctrl-C to stop and exit"
 docker logs -f capptest

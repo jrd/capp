@@ -1,0 +1,27 @@
+stages:
+  - test
+build:
+  stage: test
+  image: golang:1.18.0-alpine
+  before_script:
+    - apk add curl
+  script:
+    - |
+      cd docker-gen
+      ./build
+  artifacts:
+    name: docker-gen.$CI_COMMIT_SHORT_SHA
+    paths:
+      - docker-gen/docker-gen
+    expire_in: 10 mins
+security:
+  stage: test
+  needs:
+    - build
+  image:
+    name: aquasec/trivy
+    entrypoint: ['']
+    pull_policy: always
+  script:
+    - |
+      trivy fs -s HIGH,CRITICAL --quiet --security-checks vuln --ignore-unfixed $CI_PROJECT_DIR/docker-gen
