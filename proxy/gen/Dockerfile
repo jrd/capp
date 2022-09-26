@@ -11,7 +11,7 @@ RUN apk update && \
         openssl \
         nginx \
         docker-cli && \
-    mkdir -p /run/nginx
+    mkdir -p /run/nginx /etc/nginx/conf.d
 COPY ./LICENSE /usr/local/share/doc/docker-gen/
 COPY ./docker-gen /usr/local/bin/
 COPY ./docker-gen-wrapper /usr/local/bin/
