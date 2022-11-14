@@ -1,8 +1,8 @@
 CHANGELOG
 =========
 
-NEXT
-----
+version 2.9.0
+-------------
 - Allow to directly use openssl public keys for privileged deployement
 
 version 2.8.0
