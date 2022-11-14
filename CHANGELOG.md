@@ -1,6 +1,10 @@
 CHANGELOG
 =========
 
+version 2.9.1
+-------------
+- Openssl PEM keys should be specified directly with header/footer/new lines
+
 version 2.9.0
 -------------
 - Allow to directly use openssl public keys for privileged deployement

@@ -58,7 +58,7 @@ from yaml import (
 
 from verify_dca import verify_checksum
 
-__version__ = (2, 9, 0)
+__version__ = (2, 9, 1)
 
 
 def printflush(*args, **kwargs):
@@ -471,7 +471,7 @@ class CApp:
             f"\n- {Right.PKEY_ADD.name}"
         )
         rsp = rsps.add_parser('add', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
-        rsp.add_argument('pubkey', metavar='PUBLIC KEY', help="Signature public key")
+        rsp.add_argument('pubkey', metavar='PUBLIC KEY', help="Signature public key (PEM format without header, footer and without new line character)")
         rsp.set_defaults(func=self.action_add_pubkey)
         descr = "Delete a public key to validate DCA signatures."
         epilog = (
@@ -1350,13 +1350,12 @@ class CApp:
 
     def action_add_pubkey(self, args):
         self.check_right(Right.PKEY_ADD)
-        pubkey_list = args.pubkey.replace('\n', '').split('-----')
-        if not pubkey_list or pubkey_list[0] != '' or pubkey_list[-1] != '':
-            raise ValueError(f"pubkey '{args.pubkey}' does not start or ends with ----- like a public pem requires")
-        header = pubkey_list[1]
-        content = '\n'.join(pubkey_list[2][i:i + 64] for i in range(0, len(pubkey_list[2]), 64))
-        footer = pubkey_list[3]
-        pubkey = f'-----{header}-----\n{content}\n-----{footer}-----'
+        if not args.pubkey:
+            raise ValueError(f"pubkey '{args.pubkey}' is not valid")
+        header = '-----BEGIN PUBLIC KEY-----'
+        content = '\n'.join(args.pubkey[i:i + 64] for i in range(0, len(args.pubkey), 64))
+        footer = '-----END PUBLIC KEY-----'
+        pubkey = f'{header}\n{content}\n{footer}\n'
         pubkey_file = self.pubkeys_dir / (sha256(content.encode('ascii')).hexdigest() + '.pem')
         with open(pubkey_file, 'w', encoding='utf8') as f:
             f.write(pubkey)
