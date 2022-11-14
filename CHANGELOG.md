@@ -1,6 +1,10 @@
 CHANGELOG
 =========
 
+NEXT
+----
+- Allow to directly use openssl public keys for privileged deployement
+
 version 2.8.0
 -------------
 - Fix `max_proc` not being taken into account in the installer

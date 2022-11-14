@@ -197,7 +197,7 @@ class CApp:
                     print(f"run with args={args}, kwargs={kwargs}")
                 if len(args[0]) > 0 and args[0][0] == 'systemd-escape':
                     return real_run(*args, **kwargs)
-                elif len(args[0]) > 0 and args[0][0] == 'ssh-keygen':
+                elif len(args[0]) > 0 and args[0][0] == 'openssl':
                     return real_run(*args, **kwargs)
                 elif len(args[0]) > 2 and args[0][0:1] == ['systemctl', 'status']:
                     return CompletedProcess((), 0, stdout='Active: active (running)')
@@ -464,7 +464,6 @@ class CApp:
             f"\n- {Right.PKEY_LIST.name}"
         )
         rsp = rsps.add_parser('list', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
-        rsp.add_argument('-v', '--verbose', action='store_true', help="Output full fingerprints.")
         rsp.set_defaults(func=self.action_list_pubkeys)
         descr = "Add a public key to validate DCA signatures."
         epilog = (
@@ -480,7 +479,7 @@ class CApp:
             f"\n- {Right.PKEY_DELETE.name}"
         )
         rsp = rsps.add_parser('delete', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
-        rsp.add_argument('fingerprint', help="Signature public key fingerprint hash")
+        rsp.add_argument('name', help="Signature public key hash name")
         rsp.set_defaults(func=self.action_delete_pubkey)
         # rights
         descr = "Rights management commands."
@@ -872,30 +871,25 @@ class CApp:
         self._check_target_env(target_env)
 
     def _verify_signature(self, signature, compose_file, pubkey_file):
-        with temp_dir() as tmpd:
-            try:
-                # convert openssh public key to PKCS#8
-                temp_pubkey_file = tmpd / 'public.pem'
-                with open(temp_pubkey_file, 'w', encoding='utf8') as f:
-                    f.write(run(['ssh-keygen', '-e', '-f', str(pubkey_file), '-m', 'pkcs8'], capture_output=True, text=True).stdout)
-                run([
-                    'openssl', 'dgst',
-                    '-sha256',
-                    '-verify', str(temp_pubkey_file),
-                    '-signature', '/dev/stdin',
-                    str(compose_file),
-                ],
-                    input=signature,
-                    check=True,
-                    capture_output=True,
-                )
-                return True
-            except CalledProcessError:
-                return False
+        try:
+            run([
+                'openssl', 'dgst',
+                '-sha256',
+                '-verify', str(pubkey_file),
+                '-signature', '/dev/stdin',
+                str(compose_file),
+            ],
+                input=signature,
+                check=True,
+                capture_output=True,
+            )
+            return True
+        except CalledProcessError:
+            return False
 
     def _check_signature(self, compose_file, signature_base64):
         signature = b64decode(signature_base64)
-        for pubkey_file in (f for f in self.pubkeys_dir.iterdir() if f.is_file() and f.suffix == '.pub'):
+        for pubkey_file in (f for f in self.pubkeys_dir.iterdir() if f.is_file() and f.suffix == '.pem'):
             if self._verify_signature(signature, compose_file, pubkey_file):
                 printflush("Signature: 'OK'")
                 break
@@ -1349,47 +1343,28 @@ class CApp:
 
     def action_list_pubkeys(self, args):
         self.check_right(Right.PKEY_LIST)
-        verbose = args.verbose
-        pubkey_files = sorted([f for f in self.pubkeys_dir.iterdir() if f.is_file() and f.suffix == '.pub'])
-        full_fingerprints = []
-        for pubkey_file in pubkey_files:
-            try:
-                full_fingerprints.append(run(
-                    ['ssh-keygen', '-lf', str(pubkey_file)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip())
-            except CalledProcessError:
-                pass
+        pubkey_files = sorted([f for f in self.pubkeys_dir.iterdir() if f.is_file() and f.suffix == '.pem'])
         self.trace_action('pubkeys-list', vars(args))
-        if verbose:
-            if full_fingerprints:
-                print('\n'.join(full_fingerprints))
-        else:
-            for full_fingerprint in full_fingerprints:
-                fingerprint = full_fingerprint.split(' ')
-                print(f"{fingerprint[1].split(':')[1]}  {fingerprint[2]}")
+        for pubkey_file in pubkey_files:
+            print(pubkey_files.stem)
 
     def action_add_pubkey(self, args):
         self.check_right(Right.PKEY_ADD)
-        pubkey = args.pubkey
-        fingerprint = run(
-            ['ssh-keygen', '-lf', '-'],
-            input=pubkey,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip().split(' ')[1].split(':')[1]
-        pubkey_file = self.pubkeys_dir / (sha256(fingerprint.encode('ascii')).hexdigest() + '.pub')
+        pubkey_list = args.pubkey.replace('\n', '').split('-----')
+        if not pubkey_list or pubkey_list[0] != '' or pubkey_list[-1] != '':
+            raise ValueError(f"pubkey '{args.pubkey}' does not start or ends with ----- like a public pem requires")
+        header = pubkey_list[1]
+        content = '\n'.join(pubkey_list[2][i:i + 64] for i in range(0, len(pubkey_list[2]), 64))
+        footer = pubkey_list[3]
+        pubkey = f'-----{header}-----\n{content}\n-----{footer}-----'
+        pubkey_file = self.pubkeys_dir / (sha256(content.encode('ascii')).hexdigest() + '.pem')
         with open(pubkey_file, 'w', encoding='utf8') as f:
             f.write(pubkey)
         self.trace_action('pubkeys-add', vars(args))
 
     def action_delete_pubkey(self, args):
         self.check_right(Right.PKEY_DELETE)
-        fingerprint = args.fingerprint
-        pubkey_file = self.pubkeys_dir / (sha256(fingerprint.encode('ascii')).hexdigest() + '.pub')
+        pubkey_file = self.pubkeys_dir / (args.name + '.pem')
         if pubkey_file.exists():
             pubkey_file.unlink()
         self.trace_action('pubkeys-delete', vars(args))
