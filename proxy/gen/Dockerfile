@@ -1,4 +1,4 @@
-FROM alpine:3.15.4
+FROM alpine:3.18
 ARG DOCKER_GEN_VERSION
 ENV DOCKER_GEN_VERSION=${DOCKER_GEN_VERSION} \
     DOCKER_HOST=unix:///tmp/docker.sock \

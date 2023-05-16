@@ -20,7 +20,6 @@ ALL_SOURCES = $(shell for dir in $(DIRS); do find $$dir -type f -not -name '.*';
 
 # Show all available targets
 help:
-	@echo $(ALL_SOURCES)
 	@for target in $$(grep '^\.PHONY:' Makefile|cut -d: -f2); do \
 		msg=$$(grep -B1 "^$$target:" Makefile|grep '^#'|cut -c3-); \
 		echo "$$target:$$msg"; \
