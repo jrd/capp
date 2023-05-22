@@ -1,8 +1,8 @@
 CHANGELOG
 =========
 
-Next
-----
+version 2.9.2
+-------------
 - `docker-gen` update
 
 version 2.9.1
