@@ -1,6 +1,10 @@
 CHANGELOG
 =========
 
+Next
+----
+- `docker-gen` update
+
 version 2.9.1
 -------------
 - Openssl PEM keys should be specified directly with header/footer/new lines

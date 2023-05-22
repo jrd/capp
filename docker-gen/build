@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 cd "$(dirname "$0")"
-REQUIRED_GO_VERSION=1.18
-if [ "$(go version|sed -r 's/.* go([0-9.]+) .*/\1/')" != "$REQUIRED_GO_VERSION" ]; then
+REQUIRED_GO_VERSION=1.20
+if [ "$(go version|sed -r 's/.* go([0-9.]+) .*/\1/'|cut -d. -f1-2)" != "$REQUIRED_GO_VERSION" ]; then
     echo "Go version should be $REQUIRED_GO_VERSION" >&2
     exit 1
 fi

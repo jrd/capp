@@ -2,7 +2,7 @@ stages:
   - test
 build:
   stage: test
-  image: golang:1.18.0-alpine
+  image: golang:1.20-alpine
   before_script:
     - apk add curl
   script:
@@ -24,4 +24,4 @@ security:
     pull_policy: always
   script:
     - |
-      trivy fs -s HIGH,CRITICAL --quiet --security-checks vuln --ignore-unfixed $CI_PROJECT_DIR/docker-gen
+      trivy fs -s HIGH,CRITICAL --quiet --scanners vuln --ignore-unfixed $CI_PROJECT_DIR/docker-gen
