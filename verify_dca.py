@@ -112,6 +112,9 @@ def verify_compose(version, compose):
             verify_compose_network(net_name, net_def)
         for res_name, res_def in dc.get('x-resources', {}).items():
             verify_resources(res_name, res_def)
+        for env in ('dev', 'integ', 'staging', 'demo', 'prod'):
+            for res_name, res_def in dc.get(f'x-{env}-resources', {}).items():
+                verify_resources(res_name, res_def)
     return svc_names
 
 
@@ -214,6 +217,8 @@ def verify_resources(name, definition):
     for key in (definition or {}).keys():
         if key not in ('memory', 'memory_avg', 'cpu'):
             raise ValueError(f"key {key}, defined for {name} is not allowed in x-resources section")
+        elif definition[key] is None:
+            continue
         elif key == 'cpu':
             if definition[key] < 1 or definition[key] > 16:
                 raise ValueError(f"key {key}, defined for {name} should have a value between [1; 16], in x-resources section")

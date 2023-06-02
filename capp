@@ -738,7 +738,7 @@ class CApp:
             vhost_suffix = f"{'' if target_env == 'prod' else '-' + target_env}.{default_hostname}"
             target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
             self._pre_deploy(app, target_env, version, compose_file, target_dir)
-            dc, svc_names, limits = self._check_compose(compose_file, version, privileged)
+            dc, svc_names, limits = self._check_compose(compose_file, target_env, version, privileged)
             self._check_limits(limits)
             self._load_images((tmpd / 'images').glob('*.tar.gz'))
             if args.clean:
@@ -914,7 +914,7 @@ class CApp:
         else:
             raise ValueError("metadata signature mismatch")
 
-    def _check_compose(self, compose_file, version, privileged=False):
+    def _check_compose(self, compose_file, target_env, version, privileged=False):
         if run(['docker-compose', '-f', str(compose_file), 'config', '-q'], capture_output=True).returncode:
             raise ValueError(f'{compose_file.name} is incorrect')
         svc_names = []
@@ -935,6 +935,8 @@ class CApp:
             for net_name, net_def in dc.get('networks', {}).items():
                 self._verify_compose_network(net_name, net_def)
             for res_name, res_def in dc.get('x-resources', {}).items():
+                self._verify_resources(res_name, res_def, limits)
+            for res_name, res_def in dc.get(f'x-{target_env}-resources', {}).items():
                 self._verify_resources(res_name, res_def, limits)
         return dc, svc_names, limits
 
@@ -1048,6 +1050,8 @@ class CApp:
         for key in (definition or {}).keys():
             if key not in ('memory', 'memory_avg', 'cpu'):
                 raise ValueError(f"key {key}, defined for {name} is not allowed in x-resources section")
+            elif definition[key] is None:
+                continue
             elif key == 'cpu':
                 if not 1 <= definition[key] <= 16:
                     raise ValueError(f"key {key}, defined for {name} should have a value between [1; 16], in x-resources section")
