@@ -139,10 +139,28 @@ class EnumNames(Enum):
 
 
 class Unit(Enum):
-    B = 1
-    K = 1024
-    M = 1024 * 1024
-    G = 1024 * 1024 * 1024
+    B = 2 ** 0
+    K = 2 ** 10
+    M = 2 ** 20
+    G = 2 ** 30
+
+    def __rmul__(self, other):
+        if isinstance(other, (int, float)):
+            return other * self.value
+        else:
+            raise TypeError("Cannot do multiplication")
+
+    def __rtruediv__(self, other):
+        if isinstance(other, (int, float)):
+            return other / self.value
+        else:
+            raise TypeError("Cannot do division")
+
+    def __rfloordiv__(self, other):
+        if isinstance(other, (int, float)):
+            return other // self.value
+        else:
+            raise TypeError("Cannot do division")
 
 
 Env = EnumNames('Env', ('dev', 'integ', 'staging', 'demo', 'prod'))
@@ -611,7 +629,7 @@ class CApp:
             return None
         for unit in Unit:
             if value_unit.endswith(unit.name):
-                return int(round(float(value_unit[:-1]) * unit.value))
+                return int(round(float(value_unit[:-1]) * unit))
         return None
 
     def _to_unit(self, value_bytes):
@@ -620,7 +638,7 @@ class CApp:
         for unit in list(Unit)[::-1]:
             if value_bytes >= unit.value:
                 unit_name = unit.name if unit.value > 1 else ''
-                return f'{value_bytes / unit.value:.2f}{unit_name}'.replace(f'.00{unit_name}', unit_name).replace(f'0{unit_name}', unit_name)
+                return f'{value_bytes / unit:.2f}{unit_name}'.replace(f'.00{unit_name}', unit_name).replace(f'0{unit_name}', unit_name)
 
     def get_ssh_user(self):
         return environ.get('SSH_USER', environ['USER'])
@@ -720,7 +738,7 @@ class CApp:
             vhost_suffix = f"{'' if target_env == 'prod' else '-' + target_env}.{default_hostname}"
             target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
             self._pre_deploy(app, target_env, version, compose_file, target_dir)
-            dc, svc_names, limits = self._check_compose(compose_file, version, privileged)
+            dc, svc_names, limits = self._check_compose(compose_file, target_env, version, privileged)
             self._check_limits(limits)
             self._load_images((tmpd / 'images').glob('*.tar.gz'))
             if args.clean:
@@ -784,8 +802,8 @@ class CApp:
                     svc_def['networks']['proxy'] = {}
                 else:  # list
                     svc_def['networks'].append('proxy')
-            svc_def['mem_limit'] = f'{limits.mem[svc_name]}B'
-            svc_def['mem_reservation'] = f'{limits.mem_avg[svc_name]}B'
+            svc_def['mem_limit'] = f'{limits.memory[svc_name]}B'
+            svc_def['mem_reservation'] = f'{limits.memory_avg[svc_name]}B'
             svc_def['mem_swappiness'] = 10
             svc_def['oom_score_adj'] = 100  # prefer to kill containers than system processes
             # min = 1024 ÷ 4 (cpu = 1), avg = 1024 (cpu = 4), max 1024 × 4 (cpu = 16)
@@ -896,17 +914,18 @@ class CApp:
         else:
             raise ValueError("metadata signature mismatch")
 
-    def _check_compose(self, compose_file, version, privileged=False):
+    def _check_compose(self, compose_file, target_env, version, privileged=False):
         if run(['docker-compose', '-f', str(compose_file), 'config', '-q'], capture_output=True).returncode:
             raise ValueError(f'{compose_file.name} is incorrect')
         svc_names = []
-        limits = namedtuple('ResLimits', 'mem mem_avg cpu')({}, {}, {})
+        ResourceLimits = namedtuple('ResourceLimits', 'memory memory_avg cpu')
+        limits = ResourceLimits({}, {}, {})
         with open(compose_file, encoding='utf8') as f:
             dc = full_load(f)
         for svc_name, svc_def in dc.get('services', {}).items():
             svc_names.append(svc_name)
-            limits.mem[svc_name] = 300 * Unit.M.value if version > 1 else 1 * Unit.G.value
-            limits.mem_avg[svc_name] = 100 * Unit.M.value if version > 1 else 300 * Unit.M.value
+            limits.memory[svc_name] = 300 * Unit.M if version > 1 else 1 * Unit.G
+            limits.memory_avg[svc_name] = 100 * Unit.M if version > 1 else 300 * Unit.M
             limits.cpu[svc_name] = 4
             if version > 1:
                 self._verify_compose_service(svc_name, svc_def, privileged)
@@ -916,6 +935,8 @@ class CApp:
             for net_name, net_def in dc.get('networks', {}).items():
                 self._verify_compose_network(net_name, net_def)
             for res_name, res_def in dc.get('x-resources', {}).items():
+                self._verify_resources(res_name, res_def, limits)
+            for res_name, res_def in dc.get(f'x-{target_env}-resources', {}).items():
                 self._verify_resources(res_name, res_def, limits)
         return dc, svc_names, limits
 
@@ -1029,10 +1050,13 @@ class CApp:
         for key in (definition or {}).keys():
             if key not in ('memory', 'memory_avg', 'cpu'):
                 raise ValueError(f"key {key}, defined for {name} is not allowed in x-resources section")
+            elif definition[key] is None:
+                continue
             elif key == 'cpu':
                 if not 1 <= definition[key] <= 16:
                     raise ValueError(f"key {key}, defined for {name} should have a value between [1; 16], in x-resources section")
-                limits.cpu[name] = definition[key]
+                else:
+                    limits.cpu[name] = definition[key]
             else:
                 if not any((
                     definition[key].endswith('B'),
@@ -1041,17 +1065,18 @@ class CApp:
                     definition[key].endswith('G'),
                 )):
                     raise ValueError(f"key {key}, defined for {name} should have a unit value of B, K, M or G, in x-resources section")
-                if not search(r'^[0-9]+$', definition[key][:-1]):
+                elif not search(r'^[0-9]+$', definition[key][:-1]):
                     raise ValueError(f"key {key}, defined for {name} should have a valid postive integer value, in x-resources section")
-                value = self._to_bytes(definition[key])
-                if key == 'memory':
-                    limits.mem[name] = value
-                elif key == 'memory_avg':
-                    limits.mem_avg[name] = value
+                else:
+                    value = self._to_bytes(definition[key])
+                    if key == 'memory':
+                        limits.memory[name] = value
+                    elif key == 'memory_avg':
+                        limits.memory_avg[name] = value
 
     def _check_limits(self, limits):
         max_mem_size = self.capp_config['max_mem_size']
-        for (name, limit), (_, limit_avg) in zip(sorted(limits.mem.items()), sorted(limits.mem_avg.items())):
+        for (name, limit), (_, limit_avg) in zip(sorted(limits.memory.items()), sorted(limits.memory_avg.items())):
             if limit > max_mem_size:
                 raise ValueError(f"memory limit of {self._to_unit(limit)} exceeds max defined limit of {self._to_unit(max_mem_size)}")
             if limit_avg > limit:
