@@ -1,1 +1,0 @@
-- Per-environment configuration resource (QE-589)

@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+version 2.10.0
+--------------
+- Per-environment configuration resource (QE-589)
+- New compose-systemd version to `1.5.0`, allows to delay app start when node reboot
+
 version 2.9.2
 -------------
 - `docker-gen` update
