@@ -1,0 +1,2 @@
+- Fix hook chainging failed if one hook fails
+- Also don’t resolve symbolic links, so hooks can rely on them (backup hook)

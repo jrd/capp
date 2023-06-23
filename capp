@@ -622,7 +622,10 @@ class CApp:
 
     def _run_hook(self, hook_file, app, target_env, version, compose_file, target_dir):
         printflush(f"Run hook {hook_file}")
-        run(['/usr/bin/sudo', str(hook_file), app, target_env, str(version), str(compose_file), str(target_dir)], stdin=0, check=True, text=True)
+        try:
+            run(['/usr/bin/sudo', str(hook_file), app, target_env, str(version), str(compose_file), str(target_dir)], stdin=0, check=True, capture_output=True, text=True)
+        except CalledProcessError as e:
+            printflush(f"  Error: {e.stderr}")
 
     def _to_bytes(self, value_unit):
         if not value_unit:
@@ -1087,19 +1090,19 @@ class CApp:
 
     def _pre_deploy(self, app, target_env, version, compose_file, target_dir):
         for hook_file in self._iter_hooks('deploy', 'pre'):
-            self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
+            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
 
     def _post_deploy(self, app, target_env, version, compose_file, target_dir):
         for hook_file in self._iter_hooks('deploy', 'post'):
-            self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
+            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
 
     def _pre_undeploy(self, app, target_env, version, compose_file, target_dir):
         for hook_file in self._iter_hooks('undeploy', 'pre'):
-            self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
+            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
 
     def _post_undeploy(self, app, target_env, version, compose_file, target_dir):
         for hook_file in self._iter_hooks('undeploy', 'post'):
-            self._run_hook(hook_file.resolve(), app, target_env, version, compose_file, target_dir)
+            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
 
     def _pull_images(self, target_dir):
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
