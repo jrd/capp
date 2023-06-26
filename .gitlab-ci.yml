@@ -1,5 +1,10 @@
+include:
+  - local: /.gitlab/security-ci.yml
+  - local: /.gitlab/secret-ci.yml
+  - local: /.gitlab/tag-ci.yml
 stages:
   - test
+  - release
 build:
   stage: test
   image: golang:1.20-alpine
@@ -15,13 +20,20 @@ build:
       - docker-gen/docker-gen
     expire_in: 10 mins
 security:
-  stage: test
+  extends: .security
   needs:
     - build
-  image:
-    name: aquasec/trivy
-    entrypoint: ['']
-    pull_policy: always
-  script:
-    - |
-      trivy fs -s HIGH,CRITICAL --quiet --scanners vuln --ignore-unfixed $CI_PROJECT_DIR/docker-gen
+secret:
+  extends: .secret
+.tag_base:
+  extends: .tag
+  needs:
+    - build
+    - security
+    - secret
+tag:major:
+  extends: .tag_base
+tag:minor:
+  extends: .tag_base
+tag:patch:
+  extends: .tag_base
