@@ -92,7 +92,12 @@ def verify_files_presence(tmp_dir):
 
 
 def verify_compose(version, compose):
-    code = run(['docker-compose', '-f', str(compose), 'config', '-q'], capture_output=True).returncode
+    docker_compose_version = run(['docker', 'compose', 'version'], capture_output=True, text=True)
+    if docker_compose_version.returncode == 0 and 'Docker Compose' in docker_compose_version.stdout:
+        dc = ['docker', 'compose']
+    else:
+        dc = ['docker-compose']
+    code = run(dc + ['-f', str(compose), 'config', '-q'], capture_output=True).returncode
     if code != 0:
         raise ValueError(f'{compose} is incorrect')
     svc_names = []
