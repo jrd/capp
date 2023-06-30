@@ -349,6 +349,18 @@ class CApp:
         sp = sps.add_parser('stop', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
         add_app_env_args(sp)
         sp.set_defaults(func=self.action_stop)
+        # reload
+        descr = (
+            "Reload the application specified."
+            "\nThe application should already exist on this node."
+        )
+        epilog = (
+            "Required rights:"
+            f"\n- {Right.START.name} with env and app regexes matching the environment name and app name accordingly"
+        )
+        sp = sps.add_parser('reload', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        add_app_env_args(sp)
+        sp.set_defaults(func=self.action_reload)
         # restart
         descr = (
             "Restart the application specified."
@@ -833,8 +845,8 @@ class CApp:
         run(['sudo', '/usr/local/bin/compose-dirs', 'update', f'{app}/{target_env}'], check=True, text=True)
         systemd_svc = self._get_systemd_service_name(app, target_env)
         if args.start:
-            printflush("Restart application")
-            run(['sudo', 'systemctl', 'restart', systemd_svc], check=True, text=True)
+            printflush("Reload (or start) application")
+            run(['sudo', 'systemctl', 'reload-or-restart', systemd_svc], check=True, text=True)
         elif run(['systemctl', 'is-active', systemd_svc], capture_output=True).returncode == 0:
             printflush("Stop application")
             run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
@@ -1241,6 +1253,15 @@ class CApp:
         self.trace_action('stop', vars(args))
         svc = self._get_systemd_service_name(app, target_env)
         execlp('sudo', 'sudo', 'systemctl', 'stop', svc)
+
+    def action_reload(self, args):
+        app = args.app
+        target_env = args.env
+        self._check_app_name_target_env(app, target_env)
+        self.check_right(Right.START, app=app, env=target_env)
+        self.trace_action('reload', vars(args))
+        svc = self._get_systemd_service_name(app, target_env)
+        execlp('sudo', 'sudo', 'systemctl', 'reload', svc)
 
     def action_restart(self, args):
         app = args.app
