@@ -1,1 +1,0 @@
-- fix old docker compose python command. One can use `docker compose` or `docker-compose`.

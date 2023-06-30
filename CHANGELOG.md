@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 2.11.0
+### Fixed
+- fix old docker compose python command. One can use `docker compose` or `docker-compose`.
+### Changed
+- Allow the reload command and deploy a bit faster (Added)
+### Added
+- Example app as DCA
+- Instructions on how to local test this
+
 ## 2.10.1
 ### Fixed
 - Fix hook chaining failed if one hook fails
