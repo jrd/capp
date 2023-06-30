@@ -43,6 +43,8 @@ To switch to it, use `su -s /bin/bash --login compose` from `root` account.
 
 Main scripts are `compose-dirs` and `capp`.
 
+Use `capp users add` to create your first user.
+
 Usage
 -----
 
@@ -80,7 +82,7 @@ Be careful, volumes may contains data not backuped!
 
 This will exit with `0` status if undeploy was ok, greater number in case of error.
 
-### Apps, Start, Restart, Stop, Status, Logs
+### Apps, Start, Reload, Restart, Stop, Status, Logs
 
 See `ssh deploy@node help` for an exhaustive list of all actions and options.
 

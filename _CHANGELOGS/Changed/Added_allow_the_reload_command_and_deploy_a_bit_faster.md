@@ -1,0 +1,1 @@
+- Allow the reload command and deploy a bit faster (Added)
