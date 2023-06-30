@@ -56,7 +56,7 @@ If you have your public key allowed, you could transfer a *dca* file and its sig
 
 ### Check upload ok
 
-`ssh deploy@node dcas [check]`
+`ssh deploy@node dcas [--check]`
 
 Without `check`, it will only list *dca* files. With it, it will also indicate if checksum is ok or not.
 
@@ -98,6 +98,19 @@ Be sure to force a TTY with ssh: `ssh -t` or `RequestTTY yes` in `.ssh/config`.
 
 ⚠ Keep in mind that the compose app is handled by a systemd service so **don't start or stop** the compose while the service is running.  
 Better use the `capp start|stop` commands or `sudo systemctl start|stop` commands.
+
+Tests
+-----
+
+Use `testindocker` script to test all this in a local docker.
+
+- Use `ssh -p 1022 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@127.0.0.1` (with password root) to spawn a shell within that container (`tmux` is available)
+- Use `sudo su -s /bin/bash compose` to switch to compose user
+- Use `capp users add your_user 'your_public_key'` to add your user with all rights
+- Use `scp -P 1122 -O -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no test/myapp--prod.dca* dca@127.0.0.1:` to upload a sample dca file (and its checksum)
+- Use `ssh -p 1022 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no deploy@127.0.0.1 dcas --check` to check for dca file presence and correctness
+- Use `ssh -p 1022 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no deploy@127.0.0.1 deploy myapp--prod.dca` to deploy the application
+- Check `http://myapp.test.capp`
 
 License and authors
 -------------------
