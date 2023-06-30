@@ -6,7 +6,9 @@ The following binaries should be available:
 - usermod
 - base64
 - curl
-- docker-compose
+- docker, docker compose OR docker-compose
+- python3
+- python3-yaml
 - sudo
 - tar
 - unxz
@@ -92,7 +94,7 @@ Be sure to force a TTY with ssh: `ssh -t` or `RequestTTY yes` in `.ssh/config`.
 
 - Connect into *node* and change to the `compose` account (or your account if in the `docker` group).
 - Go into you app and environment folder, containing `docker-compose.yml` file, for instance `cd myapp/prod` from `compose` home dir.
-- Use any `docker-compose` command, like `exec` to enter a container.
+- Use any `docker compose` command, like `exec` to enter a container.
 
 ⚠ Keep in mind that the compose app is handled by a systemd service so **don't start or stop** the compose while the service is running.  
 Better use the `capp start|stop` commands or `sudo systemctl start|stop` commands.
@@ -106,3 +108,4 @@ Authors:
 
 - Cyrille Pontvieux
 - David Garceries
+- Samir Hachimi

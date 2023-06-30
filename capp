@@ -178,6 +178,11 @@ class CApp:
         global run
 
         self.config = None
+        docker_compose_version = run(['docker', 'compose', 'version'], capture_output=True, text=True)
+        if docker_compose_version.returncode == 0 and 'Docker Compose' in docker_compose_version.stdout:
+            self.dc = ['docker', 'compose']
+        else:
+            self.dc = ['docker-compose']
         self.dry_run = environ.get('CAPP_DRY_RUN', None) is not None
         if self.dry_run:
             Path('/tmp/capp').mkdir(parents=True, exist_ok=True)
@@ -918,7 +923,7 @@ class CApp:
             raise ValueError("metadata signature mismatch")
 
     def _check_compose(self, compose_file, target_env, version, privileged=False):
-        if run(['docker-compose', '-f', str(compose_file), 'config', '-q'], capture_output=True).returncode:
+        if run(self.dc + ['-f', str(compose_file), 'config', '-q'], capture_output=True).returncode:
             raise ValueError(f'{compose_file.name} is incorrect')
         svc_names = []
         ResourceLimits = namedtuple('ResourceLimits', 'memory memory_avg cpu')
@@ -1107,12 +1112,12 @@ class CApp:
     def _pull_images(self, target_dir):
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
             printflush("Pulling images…")
-            run(['docker-compose', 'pull', '--ignore-pull-failures', '--quiet'], cwd=target_dir, text=True)
+            run(self.dc + ['pull', '--ignore-pull-failures', '--quiet'], cwd=target_dir, text=True)
 
     def _build_images(self, target_dir, quiet=True, use_cache=True):
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
             printflush("Building images…")
-            cmd = ['docker-compose', 'build', '--pull']
+            cmd = self.dc + ['build', '--pull']
             if quiet:
                 cmd.append('--quiet')
             if not use_cache:
@@ -1130,7 +1135,7 @@ class CApp:
     def _clean_volumes(self, target_dir):
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
             printflush("Cleaning volumes…")
-            run(['docker-compose', 'down', '-v'], cwd=target_dir, text=True)
+            run(self.dc + ['down', '-v'], cwd=target_dir, text=True)
 
     def _copy_context(self, src_dir, dest_dir):
         excludes = ('.env', 'docker-compose.yml')
@@ -1184,7 +1189,7 @@ class CApp:
                             location_nginx_config_file.unlink()
             dc_down_args = '-v --rmi all' if args.all else '--rmi local'
             printflush("Destroying application…")
-            run(f"docker-compose down {dc_down_args} 2>&1 | grep -v ^Network | grep -v '^Removing network'", shell=True, cwd=target_dir, text=True)
+            run(f"{' '.join(self.dc)} down {dc_down_args} 2>&1 | grep -v ^Network | grep -v '^Removing network'", shell=True, cwd=target_dir, text=True)
             self._post_undeploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
             rmtree(target_dir, ignore_errors=True)
             try:
@@ -1275,7 +1280,7 @@ class CApp:
         self.check_right(Right.EXEC, app=app, env=target_env)
         self.trace_action('exec', vars(args))
         target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
-        cmd = ['docker-compose', 'exec']
+        cmd = self.dc + ['exec']
         if args.execuser:
             self.check_right(Right.EXEC_USER, app=app, env=target_env)
             cmd.extend(['-u', args.execuser])
