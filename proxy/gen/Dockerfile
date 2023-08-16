@@ -1,4 +1,4 @@
-FROM alpine:3.18
+FROM nginx:1.24-alpine
 ARG DOCKER_GEN_VERSION
 ENV DOCKER_GEN_VERSION=${DOCKER_GEN_VERSION} \
     DOCKER_HOST=unix:///tmp/docker.sock \
@@ -9,7 +9,6 @@ RUN apk update && \
     apk add --no-cache --virtual \
         .bin-deps \
         openssl \
-        nginx \
         docker-cli && \
     mkdir -p /run/nginx /etc/nginx/conf.d
 COPY ./LICENSE /usr/local/share/doc/docker-gen/

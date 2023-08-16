@@ -14,7 +14,6 @@ DOCKER_GEN_FILES = \
 GEN_FILES = \
   proxy/gen/docker-gen \
   proxy/gen/LICENSE \
-  proxy/gen/nginx.tmpl \
   proxy/le/docker-gen
 ALL_SOURCES = $(shell for dir in $(DIRS); do find $$dir -type f -not -name '.*'; done) $(SOURCES) $(GEN_FILES)
 
