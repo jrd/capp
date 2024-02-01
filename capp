@@ -772,9 +772,13 @@ class CApp:
                     server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
                     if server_nginx_config_file.is_file():
                         copy(server_nginx_config_file, vhostd_dir / vhost)
+                    else:
+                        (vhostd_dir / vhost / f'{svc_name}-server').unlink()
                     location_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-location'
                     if location_nginx_config_file.is_file():
                         copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
+                    else:
+                        (vhostd_dir / vhost / f'{svc_name}_location').unlink()
             orig_dotenv = tmpd / 'context' / '.env'
             orig_dotenv_content = orig_dotenv.open(encoding='utf8').read() if orig_dotenv.exists() else ''
         with open(target_dir / '.env', 'w', encoding='utf8') as f:
