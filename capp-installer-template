@@ -102,8 +102,8 @@ chown :compose /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp
 chmod g+w,o=rX /var/docker-volumes/nginx-proxy/vhost.d /etc/capp/users /etc/capp/pubkeys /etc/capp/rights
 cp -r proxy dca /etc/compose/
 if [ "$nohttps" -eq 1 ]; then
-    # delete the letsencrypt service
-    sed -ri '/letsencrypt/,/certs:rw/d' /etc/compose/proxy/docker-compose.yml
+    # comment the letsencrypt service
+    sed -ri '/le:/,/certs:rw/s/^/#/' /etc/compose/proxy/docker-compose.yml
     # do not bind the 443 port on the host
     sed -ri '/:443/d' /etc/compose/proxy/docker-compose.yml
     # do not redirect http access to https
