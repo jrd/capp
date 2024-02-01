@@ -23,6 +23,7 @@ services:
     environment:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"
       - "DEFAULT_HOST=${DEFAULT_HOST}"
+      - "RESOLVERS=80.67.169.12 80.67.169.40"  # fdn
     networks:
       - "network"
     volumes:
