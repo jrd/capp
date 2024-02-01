@@ -3,23 +3,24 @@ set -e
 cd "$(dirname "$0")"
 ver=$(cat version)
 curl -sL "https://github.com/nginx-proxy/docker-gen/archive/refs/tags/${ver}.tar.gz" | tar -xzf-
+[ -d src ] && rm -r src
 mv "docker-gen-$ver" src
 cp security-updates src/
-REQUIRED_GO_VERSION=1.20
-if [ "$(go version|sed -r 's/.* go([0-9.]+) .*/\1/'|cut -d. -f1-2)" != "$REQUIRED_GO_VERSION" ] && docker --version >/dev/null 2>&1; then
+REQUIRED_GO_VERSION=1.21
+compile_script="set -e\
+; sh security-updates\
+; go mod download\
+; GOOS=linux CGO_ENABLED=0 GOCACHE=/tmp/ go build -ldflags '-X main.buildVersion=${ver}' -buildvcs=false -o ../docker-gen ./cmd/docker-gen\
+"
+if [ -n "$FORCE_DOCKER" ] || (\
+    [ "$(go version|sed -r 's/.* go([0-9.]+) .*/\1/'|cut -d. -f1-2)" != "$REQUIRED_GO_VERSION" ] && \
+    docker --version >/dev/null 2>&1
+); then
     echo "Go version should be $REQUIRED_GO_VERSION, try running in docker" >&2
-    docker run --rm -it -v "$PWD:/build" -w /build/src -u "$(id -u):$(id -g)" golang:${REQUIRED_GO_VERSION}-alpine sh -c 'set -e\
-      ; sh security-updates\
-      ; go mod download\
-      ; GOOS=linux CGO_ENABLED=0 GOCACHE=/tmp/ go build -ldflags "-X main.buildVersion=${ver}" -buildvcs=false -o ../docker-gen ./cmd/docker-gen\
-    '
+    mkdir -p src/cache
+    docker run --rm -it -v "$PWD:/build" -v "$PWD/src/cache:/.cache" -w /build/src -u "$(id -u):$(id -g)" golang:${REQUIRED_GO_VERSION}-alpine sh -c "$compile_script"
 else
-    (
-        cd src
-        sh security-updates
-        go mod download
-        GOOS=linux CGO_ENABLED=0 GOCACHE=/tmp/ go build -ldflags "-X main.buildVersion=${ver}" -buildvcs=false -o ../docker-gen ./cmd/docker-gen
-    )
+    ( cd src; sh -c "$compile_script")
 fi
 cp src/LICENSE ./
 rm -rf src

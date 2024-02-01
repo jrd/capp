@@ -5,12 +5,13 @@
   image:
     name: aquasec/trivy
     entrypoint: [""]
+    pull_policy: ["always", "if-not-present"]
   variables:
     TRIVY_NO_PROGRESS: "true"
     TRIVY_EXIT_CODE: 1
     TRIVY_SEVERITY: "HIGH,CRITICAL"
     TRIVY_IGNORE_UNFIXED: "true"
-    TRIVY_SECURITY_CHECKS: "vuln"
+    TRIVY_SCANNERS: "vuln"
     TRIVY_CACHE_DIR: ".trivycache/"
   cache:
     paths:
