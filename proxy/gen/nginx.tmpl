@@ -533,6 +533,21 @@ server {
         break;
     }
 
+    {{- if (eq (first (groupByKeys $containers "Env.SERVES_PROMETHEUS_METRICS")) "true") }}
+        {{- $proto_prom := trim (or (first (groupByKeys $containers "Env.VIRTUAL_PROTO")) "http") }}
+        {{- $dest_prom := (or (first (groupByKeys $containers "Env.VIRTUAL_PROMETHEUS_DEST")) "/prometheus") }}
+        {{- template "location" (dict
+            "Path" "/prometheus"
+            "Proto" $proto_prom
+            "Upstream" $upstream_name
+            "Host" $host
+            "VhostRoot" $vhost_root
+            "Dest" $dest_prom
+            "NetworkTag" "internal"
+            "Containers" $containers
+        ) }}
+    {{- end }}
+
     location / {
         {{- if eq $globals.external_https_port "443" }}
         return 301 https://$host$request_uri;
@@ -622,6 +637,21 @@ server {
     include {{ printf "/etc/nginx/vhost.d/%s" $host }};
     {{- else if (exists "/etc/nginx/vhost.d/default") }}
     include /etc/nginx/vhost.d/default;
+    {{- end }}
+
+    {{- if (eq (first (groupByKeys $containers "Env.SERVES_PROMETHEUS_METRICS")) "true") }}
+        {{- $proto_prom := trim (or (first (groupByKeys $containers "Env.VIRTUAL_PROTO")) "http") }}
+        {{- $dest_prom := (or (first (groupByKeys $containers "Env.VIRTUAL_PROMETHEUS_DEST")) "/prometheus") }}
+        {{- template "location" (dict
+            "Path" "/prometheus"
+            "Proto" $proto_prom
+            "Upstream" $upstream_name
+            "Host" $host
+            "VhostRoot" $vhost_root
+            "Dest" $dest_prom
+            "NetworkTag" "internal"
+            "Containers" $containers
+        ) }}
     {{- end }}
 
     {{- range $path, $containers := $paths }}
