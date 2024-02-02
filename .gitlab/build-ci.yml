@@ -1,0 +1,16 @@
+.build:
+  stage: test
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  image: golang:1.21-alpine
+  before_script:
+    - apk add curl
+  script:
+    - |
+      cd docker-gen
+      ./build
+  artifacts:
+    name: docker-gen.$CI_COMMIT_SHORT_SHA
+    paths:
+      - docker-gen/docker-gen
+    expire_in: 10 mins

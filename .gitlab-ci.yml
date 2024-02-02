@@ -1,24 +1,15 @@
 include:
+  - local: /.gitlab/build-ci.yml
   - local: /.gitlab/security-ci.yml
   - local: /.gitlab/secret-ci.yml
   - local: /.gitlab/tag-ci.yml
+  - local: /.gitlab/publish-ci.yml
 stages:
   - test
   - release
+  - publish
 build:
-  stage: test
-  image: golang:1.21-alpine
-  before_script:
-    - apk add curl
-  script:
-    - |
-      cd docker-gen
-      ./build
-  artifacts:
-    name: docker-gen.$CI_COMMIT_SHORT_SHA
-    paths:
-      - docker-gen/docker-gen
-    expire_in: 10 mins
+  extends: .build
 security:
   extends: .security
   needs:
@@ -37,3 +28,5 @@ tag:minor:
   extends: .tag_base
 tag:patch:
   extends: .tag_base
+publish:
+  extends: .publish

@@ -1,5 +1,5 @@
 #!/bin/sh
-set -e
+set -ex
 cd "$(dirname "$0")"
 ver=$(cat version)
 curl -sL "https://github.com/nginx-proxy/docker-gen/archive/refs/tags/${ver}.tar.gz" | tar -xzf-
