@@ -1,4 +1,7 @@
 #!/bin/sh
 # nginx 1.25 not available yet in alpine: https://pkgs.alpinelinux.org/package/edge/main/x86/nginx
 # last template commit to support 1.24: c1a2b31f3504d5831b2138b159c0abd94b18c9a6
-curl -sL 'https://github.com/nginx-proxy/nginx-proxy/raw/c1a2b31f3504d5831b2138b159c0abd94b18c9a6/nginx.tmpl' > "$(dirname "$0")/nginx.tmpl"
+cd "$(dirname "$0")"
+curl -sL 'https://github.com/nginx-proxy/nginx-proxy/raw/c1a2b31f3504d5831b2138b159c0abd94b18c9a6/nginx.tmpl' > nginx.tmpl
+# patch for prometheus location
+patch -p0 -i nginx_tmpl.patch

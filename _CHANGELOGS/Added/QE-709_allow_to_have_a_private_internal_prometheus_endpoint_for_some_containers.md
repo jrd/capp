@@ -1,0 +1,1 @@
+- Allow to have a private/internal /prometheus endpoint for some containers (QE-709)
