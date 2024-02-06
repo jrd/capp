@@ -1,0 +1,1 @@
+- Fix old config removal
