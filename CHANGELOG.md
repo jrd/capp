@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ## 2.14.0
 ### Fixed
 - Security updates for docker-gen
-- Vhost specific app-server or app_location should be deleted if non-existant in current dca
+- Vhost specific `app-server` or `app_location` should be deleted if non-existant in current dca
 ### Changed
 - nohttps should just comment out the https section instead of delete it
 - Use FDN DNS to prevent any surprise
