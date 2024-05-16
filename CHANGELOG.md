@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 3.0.0
+### Changed
+- Certbot-companion instead of Acme-companion to enable DNS-01 challenge
+
 ## 2.15.1
 ### Fixed
 - Fix old config removal
