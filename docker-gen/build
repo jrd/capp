@@ -6,7 +6,7 @@ curl -sL "https://github.com/nginx-proxy/docker-gen/archive/refs/tags/${ver}.tar
 [ -d src ] && rm -r src
 mv "docker-gen-$ver" src
 cp security-updates src/
-REQUIRED_GO_VERSION=1.21
+REQUIRED_GO_VERSION=1.22
 compile_script="set -e\
 ; sh security-updates\
 ; go mod download\

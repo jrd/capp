@@ -1,0 +1,1 @@
+- Certbot-companion instead of Acme-companion to enable DNS-01 challenge
