@@ -1,0 +1,1 @@
+- Panubo sshd upgraded to version 1.9.0, hosted on quay.io
