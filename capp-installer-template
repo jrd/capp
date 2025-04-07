@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 CAPP_VER=to_replace
-COMPOSE_SYSTEMD_VER=v1.6.1
+COMPOSE_SYSTEMD_VER=v1.6.2
 def_min_dca_ver=2
 def_cont_mem='10G'
 def_cont_proc=1000
