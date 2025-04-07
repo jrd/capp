@@ -2,7 +2,7 @@
   stage: test
   rules:
     - if: $CI_COMMIT_BRANCH
-  image: golang:1.21-alpine
+  image: golang:1.24-alpine
   before_script:
     - apk add curl
   script:

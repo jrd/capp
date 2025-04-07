@@ -6,7 +6,7 @@ curl -sL "https://github.com/nginx-proxy/docker-gen/archive/refs/tags/${ver}.tar
 [ -d src ] && rm -r src
 mv "docker-gen-$ver" src
 cp security-updates src/
-REQUIRED_GO_VERSION=1.22
+REQUIRED_GO_VERSION=1.24
 compile_script="set -e\
 ; sh security-updates\
 ; go mod download\
@@ -18,9 +18,9 @@ if [ -n "$FORCE_DOCKER" ] || (\
 ); then
     echo "Go version should be $REQUIRED_GO_VERSION, try running in docker" >&2
     mkdir -p src/cache
-    docker run --rm -it -v "$PWD:/build" -v "$PWD/src/cache:/.cache" -w /build/src -u "$(id -u):$(id -g)" golang:${REQUIRED_GO_VERSION}-alpine sh -c "$compile_script"
+    docker run --rm -it -v "$PWD:/build" -v "$PWD/src/cache:/.cache" -w /build/src -u "$(id -u):$(id -g)" --pull golang:${REQUIRED_GO_VERSION}-alpine sh -c "$compile_script"
 else
-    ( cd src; sh -c "$compile_script")
+    (cd src; sh -c "$compile_script")
 fi
 cp src/LICENSE ./
 rm -rf src
