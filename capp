@@ -50,6 +50,7 @@ from sys import (
 )
 from tarfile import open as taropen
 from tempfile import mkdtemp
+from unittest.mock import patch
 
 from yaml import (
     dump,
@@ -175,8 +176,6 @@ Right = EnumNames('Right', (
 
 class CApp:
     def __init__(self):
-        global run
-
         self.config = None
         docker_compose_version = run(['docker', 'compose', 'version'], capture_output=True, text=True)
         if docker_compose_version.returncode == 0 and 'Docker Compose' in docker_compose_version.stdout:
@@ -226,7 +225,7 @@ class CApp:
                     return CompletedProcess((), 0, stdout='Active: active (running)')
                 else:
                     return CompletedProcess((), 0)
-            run = mock_run
+            self.patcher = patch('subprocess.run', mock_run)
         else:
             self.compose_dirs_conf_file = Path('/etc/compose-dirs.conf')
             self.capp_conf_file = Path('/etc/capp.conf')
@@ -238,6 +237,10 @@ class CApp:
             self.rights_dir = Path('/etc/capp/rights')
             self.dca_dir = Path('/home/deploy/dca')
             self.log_file = Path('/var/log/capp.log')
+
+    def __del__(self):
+        if self.patcher:
+            self.patcher.stop()
 
     def _append_usage_to_subcommands(self, sps):
         for name, sp in sps._name_parser_map.items():
@@ -720,30 +723,12 @@ class CApp:
 
     def action_deploy(self, args):
         self.check_right(Right.DCA_READ)
-        dca = (self.dca_dir / args.dca_file).resolve()
-        if dca.parent != self.dca_dir or dca.suffix != '.dca' or not dca.is_file():
-            raise ValueError(f"{args.dca_file} is incorrect")
-        if not dca.with_suffix('.dca.sha256').is_file():
-            raise ValueError(f"{args.dca_file}.sha256 is missing")
+        dca = self._check_dca(args.dca_file)
         self.trace_action('deploy', vars(args))
         printflush(f"Deploying {dca.name}…")
-        try:
-            verify_checksum(dca)
-            printflush(f"{dca.name}: 'OK'")
-        except ValueError:
-            raise ValueError(f"{dca.name}: FAILED")
+        self._check_sum(dca)
         with temp_dir() as tmpd:
-            with taropen(dca, 'r:*') as tar:
-                tar.extractall(path=tmpd)
-            metadata_file = tmpd / 'metadata'
-            compose_file = tmpd / 'context' / 'docker-compose.yml'
-            for f in (metadata_file, compose_file):
-                if not f.is_file():
-                    raise ValueError(f"Bad {dca.name}: missing {f.name}")
-            parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
-            with open(metadata_file, encoding='utf8') as f:
-                parser.read_file(chain(('[def]',), f))
-            metadata = dict(parser['def'])
+            metadata, compose_file = self._extract_dca(dca, tmpd)
             app = metadata.get('app', None)
             target_env = metadata.get('target_env', None)
             version = float(metadata.get('version', '1'))
@@ -764,144 +749,45 @@ class CApp:
             if args.clean:
                 self._clean_volumes(target_dir)
             target_dir.mkdir(parents=True, exist_ok=True)
-            self._copy_context(tmpd / 'context', target_dir)
-            vhostd_dir = Path('/var/docker-volumes/nginx-proxy/vhost.d')
-            for svc_name in svc_names:
-                full_hostnames = self._build_full_hostnames(metadata, vhost_suffix, svc_name)
-                for vhost in full_hostnames:
-                    server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
-                    if server_nginx_config_file.is_file():
-                        copy(server_nginx_config_file, vhostd_dir / vhost)
-                    else:
-                        old_config_file = vhostd_dir / vhost / f'{svc_name}-server'
-                        if old_config_file.exists():
-                            old_config_file.unlink()
-                    location_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-location'
-                    if location_nginx_config_file.is_file():
-                        copy(location_nginx_config_file, vhostd_dir / f'{vhost}_location')
-                    else:
-                        old_config_file = vhostd_dir / vhost / f'{svc_name}_location'
-                        if old_config_file.exists():
-                            old_config_file.unlink()
-            orig_dotenv = tmpd / 'context' / '.env'
-            orig_dotenv_content = orig_dotenv.open(encoding='utf8').read() if orig_dotenv.exists() else ''
-        with open(target_dir / '.env', 'w', encoding='utf8') as f:
-            f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n{orig_dotenv_content}\n")
-        with open(target_dir / '.version', 'w', encoding='ascii') as f:
-            f.write(f"{version}\n")
-        with open(target_dir / '.metadata', 'w', encoding='utf8') as f:
-            for key, value in metadata.items():
-                f.write(f"{key}={value}\n")
-        if 'networks' not in dc:
-            dc['networks'] = {}
-        dc['networks']['proxy'] = {
-            'external': True,
-            'name': 'proxy_network',
-        }
-        for svc_name in svc_names:
-            svc_def = dc['services'][svc_name]
-            full_hostnames = self._build_full_hostnames(metadata, vhost_suffix, svc_name)
-            if full_hostnames:
-                if 'environment' not in svc_def:
-                    svc_def['environment'] = {}
-                full_host = ','.join(host.strip() for host in full_hostnames)
-                letsencrypt_full_host = ','.join(host.strip() for host in full_hostnames if host.strip() not in self.le_blacklist)
-                if isinstance(svc_def['environment'], dict):
-                    svc_def['environment']['VIRTUAL_HOST'] = full_host
-                    svc_def['environment']['LETSENCRYPT_HOST'] = letsencrypt_full_host
-                    svc_def['environment']['VIRTUAL_PORT'] = metadata.get(f'{svc_name}_vhost_port', '80')
-                else:  # list
-                    svc_def['environment'].append(f'VIRTUAL_HOST={full_host}')
-                    svc_def['environment'].append(f'LETSENCRYPT_HOST={letsencrypt_full_host}')
-                    svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc_name}_vhost_port', '80')}")
-            if any((
-                'environment' in svc_def and isinstance(svc_def['environment'], dict) and
-                    'VIRTUAL_HOST' in svc_def['environment'],
-                'environment' in svc_def and isinstance(svc_def['environment'], list) and
-                    any(e.startswith('VIRTUAL_HOST=') for e in svc_def['environment']),
-                'env_file' in svc_def and isinstance(svc_def['env_file'], str) and
-                    any(e.startswith('VIRTUAL_HOST=') for e in (target_dir / svc_def['env_file']).open(encoding='utf8').readlines()),
-                'env_file' in svc_def and isinstance(svc_def['env_file'], list) and
-                    any(e.startswith('VIRTUAL_HOST=') for env_file in svc_def['env_file'] for e in (target_dir / env_file).open(encoding='utf8').readlines()),
-            )):
-                if 'networks' not in svc_def:
-                    svc_def['networks'] = []
-                if isinstance(svc_def['networks'], dict):
-                    svc_def['networks']['proxy'] = {}
-                else:  # list
-                    svc_def['networks'].append('proxy')
-            svc_def['mem_limit'] = f'{limits.memory[svc_name]}B'
-            svc_def['mem_reservation'] = f'{limits.memory_avg[svc_name]}B'
-            svc_def['mem_swappiness'] = 10
-            svc_def['oom_score_adj'] = 100  # prefer to kill containers than system processes
-            # min = 1024 ÷ 4 (cpu = 1), avg = 1024 (cpu = 4), max 1024 × 4 (cpu = 16)
-            svc_def['pids_limit'] = self.capp_config['max_proc']
-            svc_def['cpu_shares'] = limits.cpu[svc_name] * 1024 // 4
-        with open(target_dir / 'docker-compose.yml', 'w', encoding='utf8') as f:
-            dump(dc, f)
+            self._sync_context(tmpd / 'context', target_dir)
+            self._install_vhost_config(metadata, tmpd, svc_names, vhost_suffix)
+            self._install_dot_files(metadata, tmpd, target_dir)
+        self._build_new_docker_compose(metadata, dc, svc_names, vhost_suffix, limits, target_dir)
         self._pull_images(target_dir)
         self._build_images(target_dir)
-        deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
-        with open(deps_file, 'r+', encoding='utf8') as f:
-            deps = [line.strip() for line in f if not line.startswith(f'{app}/{target_env}:')]
-            deps.append(f'{app}/{target_env}:proxy')
-            f.seek(0)
-            f.truncate()
-            f.write('\n'.join(deps))
-            f.write('\n')
-        printflush("Update systemd")
-        run(['sudo', '/usr/local/bin/compose-dirs', 'update', f'{app}/{target_env}'], check=True, text=True)
-        systemd_svc = self._get_systemd_service_name(app, target_env)
-        is_active = run(['systemctl', 'is-active', systemd_svc], capture_output=True).returncode == 0
-        if args.start:
-            if is_active:
-                try:
-                    printflush("Reload application")
-                    run(['sudo', 'systemctl', 'reload-or-restart', systemd_svc], check=True, text=True)
-                except CalledProcessError as e:
-                    printflush(f"  Error: {e.stderr}")
-                    printflush("Try restarting application instead")
-                    run(['sudo', 'systemctl', 'restart', systemd_svc], check=True, text=True)
-            else:
-                printflush("Start application")
-                run(['sudo', 'systemctl', 'start', systemd_svc], check=True, text=True)
-        elif is_active:
-            printflush("Stop application")
-            run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
+        self._update_deps_and_start_service(app, target_env, args.start)
         self._post_deploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
         printflush("Cleaning dangling images…")
         run(['docker', 'image', 'prune', '-f'], text=True)
 
-    def _check_vhost(self, vhost):
+    def _check_dca(self, dca_file):
+        dca = (self.dca_dir / dca_file).resolve()
+        if dca.parent != self.dca_dir or dca.suffix != '.dca' or not dca.is_file():
+            raise ValueError(f"{dca_file} is incorrect")
+        if not dca.with_suffix('.dca.sha256').is_file():
+            raise ValueError(f"{dca_file}.sha256 is missing")
+        return dca
+
+    def _check_sum(self, dca):
         try:
-            hostname = vhost.encode('idna').decode()
-            if len(hostname) > 255:
-                raise ValueError
-            dash_doesn_t_match_next = '(?!-)'
-            label = '[-_a-zA-Z0-9]{1,63}'
-            not_preceeded_by_dash = '(?<!-)'
-            allowed_chars = compile(f'{dash_doesn_t_match_next}{label}{not_preceeded_by_dash}$')
-            if all(allowed_chars.match(label) for label in hostname.split('.')):
-                return hostname
-            else:
-                raise ValueError
-        except (UnicodeError, ValueError):
-            raise ValueError(f"vhost {vhost} is not a valid hostname")
+            verify_checksum(dca)
+            printflush(f"{dca.name}: 'OK'")
+        except ValueError:
+            raise ValueError(f"{dca.name}: FAILED")
 
-    def _build_full_hostnames(self, metadata, vhost_suffix, svc_name):
-        return (
-            [self._check_vhost(base_vhost.strip() + vhost_suffix) for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')]
-            if f'{svc_name}_base_vhost' in metadata else []
-        ) + (
-            [self._check_vhost(vhost.strip()) for vhost in metadata[f'{svc_name}_vhost'].split(',')]
-            if f'{svc_name}_vhost' in metadata else []
-        )
-
-    def _get_systemd_service_name(self, app, env=None):
-        full_name = f"{app}{'/' + env if env else ''}"
-        full_name_systemd = run(['systemd-escape', '--suffix', 'service', full_name], check=True, capture_output=True, text=True).stdout.strip()
-        tmpl_name = self.compose_dirs_config.get('tmpl_name', 'compose')
-        return f'{tmpl_name}@{full_name_systemd}'
+    def _extract_dca(self, dca, dpath):
+        with taropen(dca, 'r:*') as tar:
+            tar.extractall(path=dpath)
+        metadata_file = dpath / 'metadata'
+        compose_file = dpath / 'context' / 'docker-compose.yml'
+        for f in (metadata_file, compose_file):
+            if not f.is_file():
+                raise ValueError(f"Bad {dca.name}: missing {f.name}")
+        parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
+        with open(metadata_file, encoding='utf8') as f:
+            parser.read_file(chain(('[def]',), f))
+        metadata = dict(parser['def'])
+        return metadata, compose_file
 
     def _check_dca_version(self, version):
         if version < self.capp_config['min_dca_version']:
@@ -1012,15 +898,15 @@ class CApp:
             'user',
             'working_dir',
         )
-        _volume_allowed_conditions = lambda vol_src: (  # noqa: E731
-            not match(r'[a-zA-Z]', vol_src),  # allow named volume starting with a letter
-            not vol_src.startswith('./'),  # allow relative path
+        _volume_allowed_conditions = lambda vol_type, vol_src: (  # noqa: E731
+            vol_type in (None, 'volume') and match(r'[a-zA-Z]', vol_src),  # allow named volume starting with a letter
+            vol_type in (None, 'bind') and vol_src.startswith('./'),  # allow relative path
         )
         if privileged:
             allowed_keys += ('ports',)
-            volume_allowed_conditions = lambda vol_src: (  # noqa: E731
-                *_volume_allowed_conditions(vol_src),
-                not vol_src.startswith('/'),  # allow absolute path
+            volume_allowed_conditions = lambda vol_type, vol_src: (  # noqa: E731
+                *_volume_allowed_conditions(vol_type, vol_src),  # default conditions
+                vol_type in (None, 'bind') and vol_src.startswith('/'),  # allow absolute path
             )
         else:
             volume_allowed_conditions = _volume_allowed_conditions
@@ -1068,10 +954,12 @@ class CApp:
                 for volume in volumes:
                     if isinstance(volume, str):
                         vol_parts = volume.split(':') if ':' in volume else []
+                        vol_type = None
                         vol_src = vol_parts[0] if vol_parts[1].lower() not in ('ro', 'rw') else ''
                     else:
+                        vol_type = volume.get('type', None)
                         vol_src = volume.get('source', '')
-                    if vol_src and all(volume_allowed_conditions(vol_src)):
+                    if vol_src and not any(volume_allowed_conditions(vol_type, vol_src)):
                         raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
 
     def _verify_compose_volume(self, name, definition):
@@ -1123,21 +1011,170 @@ class CApp:
             if not 1 <= cpu <= 16:
                 raise ValueError(f"cpu weight limit of {cpu} should be in [1; 16] range")
 
-    def _pre_deploy(self, app, target_env, version, compose_file, target_dir):
-        for hook_file in self._iter_hooks('deploy', 'pre'):
-            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
+    def _load_images(self, image_files):
+        for image_file in image_files:
+            printflush(f"Loading image {image_file}…")
+            run(f'zcat "{str(image_file)}" | docker image load', shell=True, check=True, text=True)
+        if image_files:
+            printflush("Cleaning dangling images…")
+            run(['docker', 'image', 'prune', '-f'], text=True)
 
-    def _post_deploy(self, app, target_env, version, compose_file, target_dir):
-        for hook_file in self._iter_hooks('deploy', 'post'):
-            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
+    def _clean_volumes(self, target_dir):
+        if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
+            printflush("Cleaning volumes…")
+            run(self.dc + ['down', '-v'], cwd=target_dir, text=True)
 
-    def _pre_undeploy(self, app, target_env, version, compose_file, target_dir):
-        for hook_file in self._iter_hooks('undeploy', 'pre'):
-            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
+    def _sync_context(self, src_dir, dest_dir):
+        excludes = ('.env', 'docker-compose.yml')
 
-    def _post_undeploy(self, app, target_env, version, compose_file, target_dir):
-        for hook_file in self._iter_hooks('undeploy', 'post'):
-            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
+        def ignore_func(item):
+            return item.name in excludes
+        copy_tree(src_dir, dest_dir, ignored=ignore_func)
+        # clean old files
+        src_items = {item.relative_to(src_dir) for item in src_dir.rglob('*')}
+        for dest_item in dest_dir.rglob('*'):
+            dest_rpath = dest_item.relative_to(dest_dir)
+            if dest_rpath.name in excludes:
+                continue
+            if dest_rpath not in src_items:
+                if dest_item.is_dir():
+                    rmtree(dest_item, ignore_errors=True)
+                else:
+                    dest_item.unlink()
+
+    def _install_vhost_config(self, metadata, tmpd, svc_names, vhost_suffix):
+        vhost_dir = '/vhosts'
+        vhost_cntnr = run(
+            ['docker', 'run', '--rm', '-d', '-v', f'vhosts:{vhost_dir}', 'busybox', 'tail', '-f', '/dev/null'],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        try:
+            for svc_name in svc_names:
+                full_hostnames = self._build_full_hostnames(metadata, vhost_suffix, svc_name)
+                for vhost in full_hostnames:
+                    server_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-server'
+                    if server_nginx_config_file.is_file():
+                        run(['docker', 'cp', str(server_nginx_config_file), f'{vhost_cntnr}:{vhost_dir}/{vhost}'])
+                    else:
+                        old_config_file = vhost_dir / vhost / svc_name
+                        run(['docker', 'exec', vhost_cntnr, 'rm', str(old_config_file)], capture_output=True)
+                    location_nginx_config_file = tmpd / 'proxy' / f'{svc_name}-location'
+                    if location_nginx_config_file.is_file():
+                        run(['docker', 'cp', str(location_nginx_config_file), f'{vhost_cntnr}:{vhost_dir}/{vhost}_location'])
+                    else:
+                        old_config_file = vhost_dir / vhost / f'{svc_name}_location'
+                        run(['docker', 'exec', vhost_cntnr, 'rm', str(old_config_file)], capture_output=True)
+        finally:
+            run(['docker', 'stop', '-s', '9', vhost_cntnr], capture_output=True)
+
+    def _uninstall_vhost_config(self, dc):
+        vhost_dir = '/vhosts'
+        vhost_cntnr = run(
+            ['docker', 'run', '--rm', '-d', '-v', f'vhosts:{vhost_dir}', 'busybox', 'tail', '-f', '/dev/null'],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        try:
+            for svc in dc.get('services', {}).values():
+                environment = svc.get('environment', {})
+                vhost_str = environment.get('VIRTUAL_HOST', '') if isinstance(environment, dict) \
+                    else next(iter([e for e in environment if match(r'VIRTUAL_HOST=', e)]), '=').split('=', 1)[1]
+                if vhost_str:
+                    for vhost in [x.strip() for x in vhost_str.split(',')]:
+                        server_nginx_config_file = vhost_dir / vhost
+                        run(['docker', 'exec', vhost_cntnr, 'rm', str(server_nginx_config_file)], capture_output=True)
+                        location_nginx_config_file = vhost_dir / f'{vhost}_location'
+                        run(['docker', 'exec', vhost_cntnr, 'rm', str(location_nginx_config_file)], capture_output=True)
+        finally:
+            run(['docker', 'stop', vhost_cntnr], capture_output=True)
+
+    def _check_vhost(self, vhost):
+        try:
+            hostname = vhost.encode('idna').decode()
+            if len(hostname) > 255:
+                raise ValueError
+            dash_doesn_t_match_next = '(?!-)'
+            label = '[-_a-zA-Z0-9]{1,63}'
+            not_preceeded_by_dash = '(?<!-)'
+            allowed_chars = compile(f'{dash_doesn_t_match_next}{label}{not_preceeded_by_dash}$')
+            if all(allowed_chars.match(label) for label in hostname.split('.')):
+                return hostname
+            else:
+                raise ValueError
+        except (UnicodeError, ValueError):
+            raise ValueError(f"vhost {vhost} is not a valid hostname")
+
+    def _build_full_hostnames(self, metadata, vhost_suffix, svc_name):
+        return (
+            [self._check_vhost(base_vhost.strip() + vhost_suffix) for base_vhost in metadata[f'{svc_name}_base_vhost'].split(',')]
+            if f'{svc_name}_base_vhost' in metadata else []
+        ) + (
+            [self._check_vhost(vhost.strip()) for vhost in metadata[f'{svc_name}_vhost'].split(',')]
+            if f'{svc_name}_vhost' in metadata else []
+        )
+
+    def _install_dot_files(self, metadata, tmpd, target_dir):
+        app = metadata['app']
+        target_env = metadata['target_env']
+        version = float(metadata.get('version', '1'))
+        orig_dotenv = tmpd / 'context' / '.env'
+        orig_dotenv_content = orig_dotenv.open(encoding='utf8').read() if orig_dotenv.exists() else ''
+        with open(target_dir / '.env', 'w', encoding='utf8') as f:
+            f.write(f"COMPOSE_PROJECT_NAME={app}-{target_env}\n{orig_dotenv_content}\n")
+        with open(target_dir / '.version', 'w', encoding='ascii') as f:
+            f.write(f"{version}\n")
+        with open(target_dir / '.metadata', 'w', encoding='utf8') as f:
+            for key, value in metadata.items():
+                f.write(f"{key}={value}\n")
+
+    def _build_new_docker_compose(self, metadata, dc, svc_names, vhost_suffix, limits, target_dir):
+        if 'networks' not in dc:
+            dc['networks'] = {}
+        dc['networks']['proxy'] = {
+            'external': True,
+            'name': 'proxy_network',
+        }
+        for svc_name in svc_names:
+            svc_def = dc['services'][svc_name]
+            full_hostnames = self._build_full_hostnames(metadata, vhost_suffix, svc_name)
+            if full_hostnames:
+                if 'environment' not in svc_def:
+                    svc_def['environment'] = {}
+                full_host = ','.join(host.strip() for host in full_hostnames)
+                letsencrypt_full_host = ','.join(host.strip() for host in full_hostnames if host.strip() not in self.le_blacklist)
+                if isinstance(svc_def['environment'], dict):
+                    svc_def['environment']['VIRTUAL_HOST'] = full_host
+                    svc_def['environment']['LETSENCRYPT_HOST'] = letsencrypt_full_host
+                    svc_def['environment']['VIRTUAL_PORT'] = metadata.get(f'{svc_name}_vhost_port', '80')
+                else:  # list
+                    svc_def['environment'].append(f'VIRTUAL_HOST={full_host}')
+                    svc_def['environment'].append(f'LETSENCRYPT_HOST={letsencrypt_full_host}')
+                    svc_def['environment'].append(f"VIRTUAL_PORT={metadata.get(f'{svc_name}_vhost_port', '80')}")
+            if any((
+                'environment' in svc_def and isinstance(svc_def['environment'], dict) and
+                    'VIRTUAL_HOST' in svc_def['environment'],
+                'environment' in svc_def and isinstance(svc_def['environment'], list) and
+                    any(e.startswith('VIRTUAL_HOST=') for e in svc_def['environment']),
+                'env_file' in svc_def and isinstance(svc_def['env_file'], str) and
+                    any(e.startswith('VIRTUAL_HOST=') for e in (target_dir / svc_def['env_file']).open(encoding='utf8').readlines()),
+                'env_file' in svc_def and isinstance(svc_def['env_file'], list) and
+                    any(e.startswith('VIRTUAL_HOST=') for env_file in svc_def['env_file'] for e in (target_dir / env_file).open(encoding='utf8').readlines()),
+            )):
+                if 'networks' not in svc_def:
+                    svc_def['networks'] = []
+                if isinstance(svc_def['networks'], dict):
+                    svc_def['networks']['proxy'] = {}
+                else:  # list
+                    svc_def['networks'].append('proxy')
+            svc_def['mem_limit'] = f'{limits.memory[svc_name]}B'
+            svc_def['mem_reservation'] = f'{limits.memory_avg[svc_name]}B'
+            svc_def['oom_score_adj'] = 100  # prefer to kill containers than system processes
+            # min = 1024 ÷ 4 (cpu = 1), avg = 1024 (cpu = 4), max 1024 × 4 (cpu = 16)
+            svc_def['pids_limit'] = self.capp_config['max_proc']
+            svc_def['cpu_shares'] = limits.cpu[svc_name] * 1024 // 4
+        with open(target_dir / 'docker-compose.yml', 'w', encoding='utf8') as f:
+            dump(dc, f)
 
     def _pull_images(self, target_dir):
         if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
@@ -1154,25 +1191,56 @@ class CApp:
                 cmd.append('--no-cache')
             run(cmd, cwd=target_dir, text=True)
 
-    def _load_images(self, image_files):
-        for image_file in image_files:
-            printflush(f"Loading image {image_file}…")
-            run(f'zcat "{str(image_file)}" | docker image load', shell=True, check=True, text=True)
-        if image_files:
-            printflush("Cleaning dangling images…")
-            run(['docker', 'image', 'prune', '-f'], text=True)
+    def _get_systemd_service_name(self, app, env=None):
+        full_name = f"{app}{'/' + env if env else ''}"
+        full_name_systemd = run(['systemd-escape', '--suffix', 'service', full_name], check=True, capture_output=True, text=True).stdout.strip()
+        tmpl_name = self.compose_dirs_config.get('tmpl_name', 'compose')
+        return f'{tmpl_name}@{full_name_systemd}'
 
-    def _clean_volumes(self, target_dir):
-        if target_dir.is_dir() and (target_dir / 'docker-compose.yml').is_file():
-            printflush("Cleaning volumes…")
-            run(self.dc + ['down', '-v'], cwd=target_dir, text=True)
+    def _update_deps_and_start_service(self, app, target_env, do_start):
+        deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
+        with open(deps_file, 'r+', encoding='utf8') as f:
+            deps = [line.strip() for line in f if not line.startswith(f'{app}/{target_env}:')]
+            deps.append(f'{app}/{target_env}:proxy')
+            f.seek(0)
+            f.truncate()
+            f.write('\n'.join(deps))
+            f.write('\n')
+        printflush("Update systemd")
+        run(['sudo', '/usr/local/bin/compose-dirs', 'update', f'{app}/{target_env}'], check=True, text=True)
+        systemd_svc = self._get_systemd_service_name(app, target_env)
+        is_active = run(['systemctl', 'is-active', systemd_svc], capture_output=True).returncode == 0
+        if do_start:
+            if is_active:
+                try:
+                    printflush("Reload application")
+                    run(['sudo', 'systemctl', 'reload-or-restart', systemd_svc], check=True, text=True)
+                except CalledProcessError as e:
+                    printflush(f"  Error: {e.stderr}")
+                    printflush("Try restarting application instead")
+                    run(['sudo', 'systemctl', 'restart', systemd_svc], check=True, text=True)
+            else:
+                printflush("Start application")
+                run(['sudo', 'systemctl', 'start', systemd_svc], check=True, text=True)
+        elif is_active:
+            printflush("Stop application")
+            run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
 
-    def _copy_context(self, src_dir, dest_dir):
-        excludes = ('.env', 'docker-compose.yml')
+    def _pre_deploy(self, app, target_env, version, compose_file, target_dir):
+        for hook_file in self._iter_hooks('deploy', 'pre'):
+            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
 
-        def ignore_func(item):
-            return item.name in excludes
-        copy_tree(src_dir, dest_dir, ignored=ignore_func)
+    def _post_deploy(self, app, target_env, version, compose_file, target_dir):
+        for hook_file in self._iter_hooks('deploy', 'post'):
+            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
+
+    def _pre_undeploy(self, app, target_env, version, compose_file, target_dir):
+        for hook_file in self._iter_hooks('undeploy', 'pre'):
+            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
+
+    def _post_undeploy(self, app, target_env, version, compose_file, target_dir):
+        for hook_file in self._iter_hooks('undeploy', 'post'):
+            self._run_hook(hook_file, app, target_env, version, compose_file, target_dir)
 
     def action_undeploy(self, args):
         app = args.app
@@ -1204,19 +1272,7 @@ class CApp:
         if target_dir.is_dir():
             with open(target_dir / 'docker-compose.yml', encoding='utf8') as f:
                 dc = full_load(f)
-            vhostd_dir = Path('/var/docker-volumes/nginx-proxy/vhost.d')
-            for svc in dc.get('services', {}).values():
-                environment = svc.get('environment', {})
-                vhost_str = environment.get('VIRTUAL_HOST', '') if isinstance(environment, dict) \
-                    else next(iter([e for e in environment if match(r'VIRTUAL_HOST=', e)]), '=').split('=', 1)[1]
-                if vhost_str:
-                    for vhost in [x.strip() for x in vhost_str.split(',')]:
-                        server_nginx_config_file = vhostd_dir / vhost
-                        if server_nginx_config_file.is_file():
-                            server_nginx_config_file.unlink()
-                        location_nginx_config_file = vhostd_dir / f'{vhost}_location'
-                        if location_nginx_config_file.is_file():
-                            location_nginx_config_file.unlink()
+            self._uninstall_vhost_config(dc)
             dc_down_args = '-v --rmi all' if args.all else '--rmi local'
             printflush("Destroying application…")
             run(f"{' '.join(self.dc)} down {dc_down_args} 2>&1 | grep -v ^Network | grep -v '^Removing network'", shell=True, cwd=target_dir, text=True)

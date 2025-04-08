@@ -1,8 +1,9 @@
-FROM nginx:1.24-alpine
+FROM nginx:1.27-alpine
 ARG DOCKER_GEN_VERSION
 ENV DOCKER_GEN_VERSION=${DOCKER_GEN_VERSION} \
     DOCKER_HOST=unix:///tmp/docker.sock \
-    NGINX_PROXY_CONTAINER=nginx-proxy
+    NGINX_PROXY_CONTAINER=nginx-proxy \
+    NO_COLOR=1
 # Install packages required by the image
 RUN apk update && \
     apk upgrade && \

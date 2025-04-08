@@ -1,4 +1,3 @@
-version: '2.4'
 services:
   nginx:
     build:
@@ -7,13 +6,31 @@ services:
     networks:
       - "network"
     ports:
-      - "0.0.0.0:80:80"
-      - "0.0.0.0:443:443"
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
     volumes:
-      - nginx-conf:/etc/nginx/conf.d:ro
-      - nginx-html:/usr/share/nginx/html:ro
-      - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
-      - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
+      - type: volume
+        source: nginx-conf
+        target: /etc/nginx/conf.d
+        read_only: true
+      - type: volume
+        source: nginx-html
+        target: /usr/share/nginx/html
+        read_only: true
+      - type: volume
+        source: vhosts
+        target: /etc/nginx/vhost.d
+        read_only: true
+      - type: volume
+        source: certs
+        target: /etc/nginx/certs
+        read_only: true
   gen:
     build:
       context: gen
@@ -23,19 +40,31 @@ services:
     environment:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"
       - "DEFAULT_HOST=${DEFAULT_HOST}"
-      - "RESOLVERS=80.67.169.12 80.67.169.40"  # fdn
     networks:
       - "network"
     volumes:
-      - /var/run/docker.sock:/tmp/docker.sock:ro
-      - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:ro
-      - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:ro
-      - nginx-conf:/etc/proxy-conf.d:rw
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+      - type: volume
+        source: vhosts
+        target: /etc/nginx/vhost.d
+        read_only: true
+      - type: volume
+        source: certs
+        target: /etc/nginx/certs
+        read_only: true
+      - type: volume
+        source: nginx-conf
+        target: /etc/proxy-conf.d
+        read_only: false
   le:
     build:
       context: le
       args:
         - DOCKER_GEN_VERSION=${DOCKER_GEN_VERSION}
+    container_name: letsencrypt
     environment:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"
       - "NGINX_DOCKER_GEN_CONTAINER=docker-gen"
@@ -43,15 +72,37 @@ services:
     networks:
       - "network"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - acme:/etc/acme.sh:rw
-      - nginx-conf:/etc/nginx/conf.d:rw
-      - nginx-html:/usr/share/nginx/html:rw
-      - /var/docker-volumes/nginx-proxy/vhost.d:/etc/nginx/vhost.d:rw
-      - /var/docker-volumes/nginx-proxy/certs:/etc/nginx/certs:rw
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+      - type: volume
+        source: certbot
+        target: /etc/certbot
+        read_only: false
+      - type: volume
+        source: nginx-conf
+        target: /etc/nginx/conf.d
+        read_only: false
+      - type: volume
+        source: nginx-html
+        target: /usr/share/nginx/html
+        read_only: false
+      - type: volume
+        source: vhosts
+        target: /etc/nginx/vhost.d
+        read_only: false
+      - type: volume
+        source: certs
+        target: /etc/nginx/certs
+        read_only: false
 networks:
   "network":
 volumes:
   "nginx-conf":
   "nginx-html":
-  "acme":
+  "certbot":
+  "vhosts":
+    external: true
+  "certs":
+    external: true

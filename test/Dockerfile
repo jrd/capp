@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.2
+# syntax=docker/dockerfile:1
 FROM debian:12
 VOLUME /var/lib/docker
 RUN apt-get update \
