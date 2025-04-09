@@ -12,11 +12,22 @@
     TRIVY_SEVERITY: "HIGH,CRITICAL"
     TRIVY_IGNORE_UNFIXED: "true"
     TRIVY_SCANNERS: "vuln"
-    TRIVY_CACHE_DIR: ".trivycache/"
+    TRIVY_CACHE_DIR: "/trivycache/"
+    TRIVY_DB_REPOSITORY: "public.ecr.aws/aquasecurity/trivy-db"
+    TRIVY_JAVA_DB_REPOSITORY: "public.ecr.aws/aquasecurity/trivy-java-db"
   cache:
     paths:
-      - .trivycache/
+      - /trivycache/
+  before_script:
+    - |
+      some_time_ago=$(($(date +%s) - 2 * 86400))
+      db_time=$(date -r "$TRIVY_CACHE_DIR/db/metadata.json" +%s 2>/dev/null || echo 0)
+      java_db_time=$(date -r "$TRIVY_CACHE_DIR/java-db/metadata.json" +%s 2>/dev/null || echo 0)
+      if [ $db_time -lt $some_time_ago ]; then
+        trivy image --download-db-only || true
+      fi
+      if [ $java_db_time -lt $some_time_ago ]; then
+        trivy image --download-java-db-only || true
+      fi
   script:
-    - 'trivy image --clear-cache'
-    - 'trivy image --download-db-only'
-    - 'trivy fs "$CI_PROJECT_DIR"'
+    - 'trivy rootfs "$CI_PROJECT_DIR"'
