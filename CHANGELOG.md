@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 4.0.0
+### Changed
+- certificates and vhost files are now in named volumes
+- ComposeSystemd upgraded to 1.6.2
+- docker-gen upgraded to version 0.14.6
+- Panubo sshd upgraded to version 1.9.0, hosted on quay.io
+- proxy services updated
+
 ## 3.0.0
 ### Changed
 - Certbot-companion instead of Acme-companion to enable DNS-01 challenge
