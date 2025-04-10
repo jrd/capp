@@ -69,6 +69,7 @@ services:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"
       - "NGINX_DOCKER_GEN_CONTAINER=docker-gen"
       - "DEFAULT_EMAIL=${DEFAULT_EMAIL}"
+      - "FILES_PERMS=644"
     networks:
       - "network"
     volumes:
