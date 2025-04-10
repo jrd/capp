@@ -1,4 +1,3 @@
-version: "2.4"
 services:
   scp:
     build:
@@ -11,12 +10,30 @@ services:
       - "MOTD=Docker Compose Archives"
       - "SSH_USERS=dca:1000:1000"
     volumes:
-      - "keys:/etc/ssh/keys:rw"
-      - "./dca_keys_entrypoint:/etc/entrypoint.d/dca_keys:ro"
-      - "/etc/capp/users:/etc/capp/users:ro"
-      - "/etc/capp/rights:/etc/capp/rights:ro"
-      - "/home/deploy/dca:/home/dca:rw"
+      - type: volume
+        source: keys
+        target: /etc/ssh/keys
+        read_only: false
+      - type: bind
+        source: ./dca_keys_entrypoint
+        target: /etc/entrypoint.d/dca_keys
+        read_only: true
+      - type: bind
+        source: /etc/capp/users
+        target: /etc/capp/users
+        read_only: true
+      - type: bind
+        source: /etc/capp/rights
+        target: /etc/capp/rights
+        read_only: true
+      - type: bind
+        source: /home/deploy/dca
+        target: /home/dca
+        read_only: false
     ports:
-      - "0.0.0.0:122:22"
+      - target: 22
+        published: 122
+        protocol: tcp
+        mode: host
 volumes:
   keys:
