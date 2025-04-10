@@ -239,7 +239,7 @@ class CApp:
             self.log_file = Path('/var/log/capp.log')
 
     def __del__(self):
-        if self.patcher:
+        if hasattr(self, 'patcher'):
             self.patcher.stop()
 
     def _append_usage_to_subcommands(self, sps):

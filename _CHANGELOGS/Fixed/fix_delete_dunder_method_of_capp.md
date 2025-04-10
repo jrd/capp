@@ -1,0 +1,1 @@
+- fix delete dunder method of Capp
