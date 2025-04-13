@@ -502,6 +502,7 @@ class CApp:
             f"\n- {Right.PKEY_LIST.name}"
         )
         rsp = rsps.add_parser('list', formatter_class=PositionalFirstHelpFormatter, help=descr, description=descr, epilog=epilog)
+        rsp.add_argument('-v', '--verbose', action='store_true', help="Show public keys")
         rsp.set_defaults(func=self.action_list_pubkeys)
         descr = "Add a public key to validate DCA signatures."
         epilog = (
@@ -1470,11 +1471,14 @@ class CApp:
                     f.write(f'{name} {env_regex} {app_regex}\n')
 
     def action_list_pubkeys(self, args):
+        verbose = args.verbose
         self.check_right(Right.PKEY_LIST)
         pubkey_files = sorted([f for f in self.pubkeys_dir.iterdir() if f.is_file() and f.suffix == '.pem'])
         self.trace_action('pubkeys-list', vars(args))
         for pubkey_file in pubkey_files:
             print(pubkey_file.stem)
+            if verbose:
+                print(pubkey_file.read_text())
 
     def action_add_pubkey(self, args):
         self.check_right(Right.PKEY_ADD)
