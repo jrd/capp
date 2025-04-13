@@ -40,6 +40,8 @@ services:
     environment:
       - "NGINX_PROXY_CONTAINER=nginx-proxy"
       - "DEFAULT_HOST=${DEFAULT_HOST}"
+      # acme challenge config is done within le container
+      - "ACME_HTTP_CHALLENGE_LOCATION=legacy"
     networks:
       - "network"
     volumes:
