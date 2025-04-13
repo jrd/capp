@@ -1474,7 +1474,7 @@ class CApp:
         pubkey_files = sorted([f for f in self.pubkeys_dir.iterdir() if f.is_file() and f.suffix == '.pem'])
         self.trace_action('pubkeys-list', vars(args))
         for pubkey_file in pubkey_files:
-            print(pubkey_files.stem)
+            print(pubkey_file.stem)
 
     def action_add_pubkey(self, args):
         self.check_right(Right.PKEY_ADD)
