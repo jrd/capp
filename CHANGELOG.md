@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 4.0.1
+### Fixed
+- acme challenge config is done within le container and should not be added in the gen container
+- fix delete dunder method of Capp
+- fix listing priviledged public keys
+- fix permissions for certficates keys
+### Changed
+- Modern dca compose file
+### Added
+- Allow to show priviledged public keys on listing
+
 ## 4.0.0
 ### Changed
 - certificates and vhost files are now in named volumes

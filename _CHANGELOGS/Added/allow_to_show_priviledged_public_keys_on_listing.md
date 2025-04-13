@@ -1,1 +1,0 @@
-- Allow to show priviledged public keys on listing
