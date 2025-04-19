@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 CAPP_VER=to_replace
-COMPOSE_SYSTEMD_VER=v1.6.2
+COMPOSE_SYSTEMD_VER=1.7.0
 def_min_dca_ver=2
 def_cont_mem='10G'
 def_cont_proc=1000
@@ -87,10 +87,10 @@ EOF
 mkdir -p /etc/capp/users /etc/capp/pubkeys /etc/capp/rights /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy}
 tmpdir=$(mktemp -d)
 cd "$tmpdir"
-curl -Ls https://github.com/jrd/compose-systemd/archive/${COMPOSE_SYSTEMD_VER}.tar.gz | tar xzf -
+curl -Ls https://gitlab.com/jrdasm/compose-systemd/-/archive/v${COMPOSE_SYSTEMD_VER}/compose-systemd-v${COMPOSE_SYSTEMD_VER}.tar.gz | tar -xzf -
 tail -n+$offset "$me" | base64 -d | tar xJf -
-cp compose-systemd-*/compose-dirs.conf /etc/
-cp compose-systemd-*/compose-dirs /usr/local/bin/
+cp compose-systemd-*/compose-systemd.conf /etc/
+cp compose-systemd-*/compose-systemd /usr/local/bin/
 cat > /usr/local/bin/dc <<EOF
 #!/bin/sh
 exec $dc "\$@"
@@ -182,8 +182,8 @@ groups compose | grep -q '\<systemd-journal\>' || usermod -a -G systemd-journal 
 groups compose | grep -q '\<deploy\>' || usermod -a -G deploy compose
 systemctl_path=$(which systemctl)
 cat > /etc/sudoers.d/compose <<EOF
-# Allow members of compose group to execute compose-dirs command
-Cmnd_Alias COMPOSE_DIRS = /usr/local/bin/compose-dirs
+# Allow members of compose group to execute compose-systemd command
+Cmnd_Alias COMPOSE_DIRS = /usr/local/bin/compose-systemd
 Cmnd_Alias COMPOSE_SVC = $systemctl_path start compose@*,\
                          $systemctl_path stop compose@*,\
                          $systemctl_path reload compose@*,\
@@ -210,9 +210,9 @@ set +e
     cd ../proxy
     $dc build --pull --no-cache
 )
-/usr/local/bin/compose-dirs install
-/usr/local/bin/compose-dirs update
-/usr/local/bin/compose-dirs start
+/usr/local/bin/compose-systemd install
+/usr/local/bin/compose-systemd update
+/usr/local/bin/compose-systemd start
 rm -rf "$tmpdir"
 exit 0
 ##########

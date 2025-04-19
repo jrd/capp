@@ -41,7 +41,7 @@ All actions should be done under the **`compose`** account.
 
 To switch to it, use `su -s /bin/bash --login compose` from `root` account.
 
-Main scripts are `compose-dirs` and `capp`.
+Main scripts are `compose-systemd` and `capp`.
 
 Use `capp users add` to create your first user.
 

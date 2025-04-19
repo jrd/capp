@@ -185,8 +185,8 @@ class CApp:
         self.dry_run = environ.get('CAPP_DRY_RUN', None) is not None
         if self.dry_run:
             Path('/tmp/capp').mkdir(parents=True, exist_ok=True)
-            self.compose_dirs_conf_file = Path('/tmp/capp/compose-dirs.conf')
-            with open(self.compose_dirs_conf_file, 'w', encoding='utf8') as f:
+            self.compose_systemd_conf_file = Path('/tmp/capp/compose-systemd.conf')
+            with open(self.compose_systemd_conf_file, 'w', encoding='utf8') as f:
                 f.write(f"compose_user={getpwuid(getuid()).pw_name}\ncompose_dir=/tmp/capp/compose\ndeps_file=deps\ntmpl_name=compose\n")
             Path('/tmp/capp/compose').mkdir(parents=True, exist_ok=True)
             Path('/tmp/capp/compose/deps').touch()
@@ -227,7 +227,7 @@ class CApp:
                     return CompletedProcess((), 0)
             self.patcher = patch('subprocess.run', mock_run)
         else:
-            self.compose_dirs_conf_file = Path('/etc/compose-dirs.conf')
+            self.compose_systemd_conf_file = Path('/etc/compose-systemd.conf')
             self.capp_conf_file = Path('/etc/capp.conf')
             self.hooks_root_dir = Path('/etc/capp/hooks.d')
             # lets’s encrypt black list file
@@ -582,19 +582,19 @@ class CApp:
             die(e)
 
     def _check(self):
-        self.compose_dirs_config = self._read_compose_dirs_config()
+        self.compose_systemd_config = self._read_compose_systemd_config()
         self.capp_config = self._read_capp_config()
         self.le_blacklist = self._read_le_blacklist()
         self._check_user()
 
-    def _read_compose_dirs_config(self):
-        if not self.compose_dirs_conf_file.is_file():
+    def _read_compose_systemd_config(self):
+        if not self.compose_systemd_conf_file.is_file():
             raise ValueError(
-                "This script relies on compose-systemd: https://github.com/jrd/compose-systemd"
-                f"\n{self.compose_dirs_conf_file} file should exist"
+                "This script relies on compose-systemd: https://gitlab.com/jrdasm/compose-systemd"
+                f"\n{self.compose_systemd_conf_file} file should exist"
             )
         parser = ConfigParser(delimiters=('=',), comment_prefixes=('#',), empty_lines_in_values=False)
-        with open(self.compose_dirs_conf_file, encoding='utf8') as f:
+        with open(self.compose_systemd_conf_file, encoding='utf8') as f:
             parser.read_file(chain(('[def]',), f))
         return dict(parser['def'])
 
@@ -621,7 +621,7 @@ class CApp:
 
     def _check_user(self):
         current_user_name = getpwuid(getuid()).pw_name
-        expected_user_name = self.compose_dirs_config.get('compose_user', '')
+        expected_user_name = self.compose_systemd_config.get('compose_user', '')
         if current_user_name != expected_user_name:
             raise ValueError(f"This script should be run as {expected_user_name}")
 
@@ -742,7 +742,7 @@ class CApp:
             self.check_right(Right.DEPLOY, app=app, env=target_env)
             default_hostname = self.capp_config['default_hostname']
             vhost_suffix = f"{'' if target_env == 'prod' else '-' + target_env}.{default_hostname}"
-            target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
+            target_dir = Path(self.compose_systemd_config['compose_dir']) / app / target_env
             self._pre_deploy(app, target_env, version, compose_file, target_dir)
             dc, svc_names, limits = self._check_compose(compose_file, target_env, version, privileged)
             self._check_limits(limits)
@@ -1195,11 +1195,11 @@ class CApp:
     def _get_systemd_service_name(self, app, env=None):
         full_name = f"{app}{'/' + env if env else ''}"
         full_name_systemd = run(['systemd-escape', '--suffix', 'service', full_name], check=True, capture_output=True, text=True).stdout.strip()
-        tmpl_name = self.compose_dirs_config.get('tmpl_name', 'compose')
+        tmpl_name = self.compose_systemd_config.get('tmpl_name', 'compose')
         return f'{tmpl_name}@{full_name_systemd}'
 
     def _update_deps_and_start_service(self, app, target_env, do_start):
-        deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
+        deps_file = Path(self.compose_systemd_config['compose_dir']) / self.compose_systemd_config['deps_file']
         with open(deps_file, 'r+', encoding='utf8') as f:
             deps = [line.strip() for line in f if not line.startswith(f'{app}/{target_env}:')]
             deps.append(f'{app}/{target_env}:proxy')
@@ -1208,7 +1208,7 @@ class CApp:
             f.write('\n'.join(deps))
             f.write('\n')
         printflush("Update systemd")
-        run(['sudo', '/usr/local/bin/compose-dirs', 'update', f'{app}/{target_env}'], check=True, text=True)
+        run(['sudo', '/usr/local/bin/compose-systemd', 'update', f'{app}/{target_env}'], check=True, text=True)
         systemd_svc = self._get_systemd_service_name(app, target_env)
         is_active = run(['systemctl', 'is-active', systemd_svc], capture_output=True).returncode == 0
         if do_start:
@@ -1248,7 +1248,7 @@ class CApp:
         target_env = args.env
         self._check_app_name_target_env(app, target_env)
         self.check_right(Right.DEPLOY, app=app, env=target_env)
-        target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
+        target_dir = Path(self.compose_systemd_config['compose_dir']) / app / target_env
         if not target_dir.exists():
             raise ValueError(f'App {app}/{target_env} does not exist')
         self.trace_action('undeploy', vars(args))
@@ -1261,7 +1261,7 @@ class CApp:
         self._pre_undeploy(app, target_env, version, target_dir / 'docker-compose.yml', target_dir)
         systemd_svc = self._get_systemd_service_name(app, target_env)
         run(['sudo', 'systemctl', 'stop', systemd_svc], check=True, text=True)
-        deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
+        deps_file = Path(self.compose_systemd_config['compose_dir']) / self.compose_systemd_config['deps_file']
         with open(deps_file, 'r+', encoding='utf8') as f:
             deps = [line.strip() for line in f if not line.startswith(f'{app}/{target_env}:')]
             f.seek(0)
@@ -1269,7 +1269,7 @@ class CApp:
             f.write('\n'.join(deps))
             f.write('\n')
         printflush("Update systemd")
-        run(['sudo', '/usr/local/bin/compose-dirs', 'update', f'{app}/{target_env}'], check=True, text=True)
+        run(['sudo', '/usr/local/bin/compose-systemd', 'update', f'{app}/{target_env}'], check=True, text=True)
         if target_dir.is_dir():
             with open(target_dir / 'docker-compose.yml', encoding='utf8') as f:
                 dc = full_load(f)
@@ -1289,7 +1289,7 @@ class CApp:
     def action_apps(self, args):
         self.check_right(Right.APP_LIST)
         self.trace_action('apps', vars(args))
-        deps_file = Path(self.compose_dirs_config['compose_dir']) / self.compose_dirs_config['deps_file']
+        deps_file = Path(self.compose_systemd_config['compose_dir']) / self.compose_systemd_config['deps_file']
         with open(deps_file, encoding='utf8') as f:
             deps = [line.strip() for line in f if search(r'/.+:', line)]
             for dep in sorted(deps):
@@ -1307,7 +1307,7 @@ class CApp:
         self._check_app_name_target_env(app, target_env)
         self.check_right(Right.START, app=app, env=target_env)
         self.trace_action('build', vars(args))
-        target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
+        target_dir = Path(self.compose_systemd_config['compose_dir']) / app / target_env
         self._pull_images(target_dir)
         self._build_images(target_dir, quiet=False, use_cache=False)
 
@@ -1375,7 +1375,7 @@ class CApp:
         self._check_app_name_target_env(app, target_env)
         self.check_right(Right.EXEC, app=app, env=target_env)
         self.trace_action('exec', vars(args))
-        target_dir = Path(self.compose_dirs_config['compose_dir']) / app / target_env
+        target_dir = Path(self.compose_systemd_config['compose_dir']) / app / target_env
         cmd = self.dc + ['exec']
         if args.execuser:
             self.check_right(Right.EXEC_USER, app=app, env=target_env)
