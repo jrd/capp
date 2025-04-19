@@ -156,9 +156,9 @@ chmod u=rx,g=rx,o= ~deploy/capp
 chmod g+w ~deploy/dca
 chown -R deploy: ~deploy
 chown -R :compose ~deploy/dca
-grep -q '^PermitUserEnvironment yes' /etc/ssh/sshd_config || sed -ri '/^#PermitUserEnvironment /a PermitUserEnvironment yes' /etc/ssh/sshd_config
-grep -q '^Match User deploy' /etc/ssh/sshd_config && ! grep -q '^ *AuthorizedKeysCommand' /etc/ssh/sshd_config && sed -ri '/^Match User deploy/,/^.*AuthorizedKeys.*/d' /etc/ssh/sshd_config
-grep -q '^Match User deploy' /etc/ssh/sshd_config || cat >> /etc/ssh/sshd_config <<EOF
+mkdir -p /etc/ssh/ssh_config.d
+cat >> /etc/ssh/sshd_config.d/deploy.conf <<EOF
+PermitUserEnvironment yes
 Match User deploy
         AllowAgentForwarding no
         AllowTcpForwarding no
