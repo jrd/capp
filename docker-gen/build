@@ -2,6 +2,7 @@
 set -ex
 cd "$(dirname "$0")"
 ver=$(cat version)
+# https://github.com/nginx-proxy/docker-gen/releases
 curl -sL "https://github.com/nginx-proxy/docker-gen/archive/refs/tags/${ver}.tar.gz" | tar -xzf-
 [ -d src ] && rm -r src
 mv "docker-gen-$ver" src
@@ -18,7 +19,14 @@ if [ -n "$FORCE_DOCKER" ] || (\
 ); then
     echo "Go version should be $REQUIRED_GO_VERSION, try running in docker" >&2
     mkdir -p src/cache
-    docker run --rm -it -v "$PWD:/build" -v "$PWD/src/cache:/.cache" -w /build/src -u "$(id -u):$(id -g)" --pull golang:${REQUIRED_GO_VERSION}-alpine sh -c "$compile_script"
+    docker pull golang:${REQUIRED_GO_VERSION}-alpine
+    docker run --rm \
+        -v "$PWD:/build" \
+        -v "$PWD/src/cache:/.cache" \
+        -w /build/src \
+        -u "$(id -u):$(id -g)" \
+        golang:${REQUIRED_GO_VERSION}-alpine \
+        sh -c "$compile_script"
 else
     (cd src; sh -c "$compile_script")
 fi
