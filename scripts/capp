@@ -776,7 +776,10 @@ class CApp:
 
     def _extract_dca(self, dca: Path, dpath: Path) -> tuple[dict[str, Any], Path]:
         with taropen(dca, 'r:*') as tar:
-            tar.extractall(path=dpath)
+            if version_info.major >= 3 and version_info.minor >= 12:
+                tar.extractall(path=dpath, filter='tar')
+            else:
+                tar.extractall(path=dpath)
         metadata_file = dpath / 'metadata'
         compose_file = dpath / 'context' / 'docker-compose.yml'
         for p in (metadata_file, compose_file):
