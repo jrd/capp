@@ -1,6 +1,6 @@
 #!/bin/sh
 version_get() {
-  sed -rn '/^__version__/{s/.*\(([0-9]+), ([0-9]+), ([0-9]+)\)/\1.\2.\3/;p}' capp
+  sed -rn '/^__version__/{s/.*\(([0-9]+), ([0-9]+), ([0-9]+)\)/\1.\2.\3/;p}' scripts/capp
 }
 version_set() {
   next_ver="$1"
@@ -21,7 +21,7 @@ version_set() {
     fi
     next_ver=$major.$minor.$patch
   fi
-  sed -ri "/^__version__/{s/.*/__version__ = (${next_ver})/;s/\\./, /g}" capp
+  sed -ri "/^__version__/{s/.*/__version__ = (${next_ver})/;s/\\./, /g}" scripts/capp
 }
 if [ "$1" = "get" ]; then
   version_get

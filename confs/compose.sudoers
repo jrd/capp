@@ -1,0 +1,14 @@
+# vim: ft=sudoers:
+# Allow members of compose group to execute compose-systemd command
+Cmnd_Alias COMPOSE_DIRS = /usr/local/bin/compose-systemd
+Cmnd_Alias COMPOSE_SVC = /usr/bin/systemctl start compose@*,\
+                         /usr/bin/systemctl stop compose@*,\
+                         /usr/bin/systemctl reload compose@*,\
+                         /usr/bin/systemctl reload-or-restart compose@*,\
+                         /usr/bin/systemctl restart compose@*,\
+                         /usr/bin/systemctl status compose@*
+Cmnd_Alias CAPP_HOOKS = /etc/capp/hooks.d/pre_deploy/*,\
+                        /etc/capp/hooks.d/post_deploy/*,\
+                        /etc/capp/hooks.d/pre_undeploy/*,\
+                        /etc/capp/hooks.d/post_undeploy/*
+%compose ALL= NOPASSWD: COMPOSE_DIRS, COMPOSE_SVC, CAPP_HOOKS

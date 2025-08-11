@@ -1,0 +1,5 @@
+# vim: ft=sudoers:
+# Allow members of deploy group to execute capp command
+Defaults env_keep="SSH_USER"
+Cmnd_Alias CAPP_CMD = /usr/local/bin/capp
+%deploy ALL=(compose) NOPASSWD: CAPP_CMD

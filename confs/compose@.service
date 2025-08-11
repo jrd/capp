@@ -1,0 +1,27 @@
+[Unit]
+Description=Service for docker compose in %I
+BindsTo=docker.service
+After=docker.service
+
+[Service]
+Type=simple
+ProtectSystem=yes
+ProtectHome=yes
+User=compose
+WorkingDirectory=COMPOSE_DIR/%I
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=compose-%i
+SyslogLevel=debug
+SyslogLevelPrefix=false
+ExecStartPre=@/usr/local/bin/wait-for-cpu-idle compose-wait-%i echo "Ready to start %i"
+ExecStart=@DOCKER compose-%i compose up --no-color --build --remove-orphans
+ExecReload=@DOCKER compose-reload-%i compose up --no-color --build --remove-orphans -d --wait --wait-timeout=30
+ExecStopPost=@DOCKER compose-stop-%i compose down
+TimeoutSec=30
+TimeoutStartSec=infinity
+TimeoutStopSec=1min
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

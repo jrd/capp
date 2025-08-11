@@ -1,0 +1,271 @@
+#!/bin/bash
+# vim: set ts=2 sts=2 sw=2:
+conf=/etc/capp.conf
+compose_user=compose
+tmpl_name=compose
+deps_file=compose.deps
+if [ -f "$conf" ]; then
+  # shellcheck disable=SC1090,SC1091
+  . "$conf"
+else
+  exit 1
+fi
+[ -n "$compose_dir" ] || exit 1
+[ -d "$compose_dir" ] || exit 1
+cd "$compose_dir"
+docker="$(which docker)"
+if "$docker" compose version | grep -q 'Docker Compose'; then
+  dc="$docker compose"
+else
+  echo "docker with compose required" >&2
+  exit 1
+fi
+
+usage() {
+  cat <<EOF
+Compose-systemd, part of CAPP. By Cyrille Pontvieux, 2020-2025, MIT licence
+
+compose-systemd ACTION [OPTIONS]
+OPTIONS:
+  -h, --help: this help message
+  -V, --version: show version
+  -v, --verbose: verbose output
+ACTION:
+  update [service]: update systemd unit files (or just the service provided)
+  start, stop, reload, restart, status [service]: do the acton on all (or only provided service) systemd unit files
+
+CONFIG:
+  compose directory: $compose_dir
+  compose user: $compose_user
+  systemd base service name: $tmpl_name@.service
+  dependencies file: $compose_dir/$deps_file
+
+DEPS FORMAT:
+ compose_to_run:compose_dep_1,compose_dep_2
+EOF
+}
+
+_find_loaded_instances() {
+  systemctl list-units -q --plain --no-legend --state=loaded --type=service "$tmpl_name@*" | cut -d' ' -f1 | xargs -I @ systemd-escape -u --instance "@"
+}
+_find_instances() {
+  cut -d: -f1 "$compose_dir/$deps_file"
+}
+_find_instance_deps() {
+  grep "^$1:" "$compose_dir/$deps_file" | cut -d: -f2 | tr ',' '\n' | sort
+}
+_find_instances_to_update() {
+  limited_instances="$1"
+  to_delete=""
+  to_update=""
+  loaded_instances="$(_find_loaded_instances)"
+  instances="$(_find_instances)"
+  if [ -n "$limited_instances" ]; then
+    loaded_instances=$(for inst in $loaded_instances; do echo "$limited_instances" | grep -q "^$inst\$" && echo "$inst"; done)
+    instances=$(for inst in $instances; do echo "$limited_instances" | grep -q "^$inst\$" && echo "$inst"; done)
+  fi
+  for i in $loaded_instances; do
+    if ! echo "$instances" | grep -q "^$i\$"; then
+      to_delete="$to_delete $i"
+    fi
+  done
+  for i in $instances; do
+    i_escaped=$(systemd-escape "$i")
+    defined_deps=$(_find_instance_deps "$i")
+    actual_deps=$(systemctl list-dependencies -q --plain --no-legend "$tmpl_name@$i_escaped.service" | sed -rn "/ *$tmpl_name@/{s/ *$tmpl_name@(.*)\.service/\1/;p}" | sort)
+    if [ "$defined_deps" != "$actual_deps" ]; then
+      to_update="$to_update $i"
+    fi
+  done
+  echo "$to_delete:$to_update"
+}
+
+update() {
+  set -e
+  # shellcheck disable=SC2046
+  [ $(id -u) -eq 0 ]
+  instances=$(_find_instances_to_update "$opts")
+  to_delete=$(echo "$instances" | cut -d: -f1)
+  to_update=$(echo "$instances" | cut -d: -f2)
+  for i in $to_delete; do
+    i_escaped=$(systemd-escape "$i")
+    systemctl disable --no-reload "$tmpl_name@$i_escaped.service"
+    confd="/etc/systemd/system/$tmpl_name@$i_escaped.service.d"
+    if [ -d "$confd" ]; then
+      rm -rf "$confd"
+    fi
+  done
+  for i in $to_update; do
+    deps=$(_find_instance_deps "$i")
+    i_escaped=$(systemd-escape "$i")
+    confd="/etc/systemd/system/$tmpl_name@$i_escaped.service.d"
+    rm -rf "$confd" 2>/dev/null || true
+    if [ -n "$deps" ]; then
+      mkdir -p "$confd"
+      requires=""
+      afters="docker.service"
+      for dep in $deps; do
+        [ -n "$requires" ] && sep=" " || sep=""
+        dep_escaped=$(systemd-escape "$dep")
+        requires="$requires$sep$tmpl_name@$dep_escaped.service"
+        afters="$afters $tmpl_name@$dep_escaped.service"
+      done
+      cat > "$confd/deps.conf" <<EOF
+[Unit]
+Requires=$requires
+After=$afters
+EOF
+    fi
+    systemctl enable --no-reload "$tmpl_name@$i_escaped.service"
+  done
+  systemctl daemon-reload
+}
+
+_find_order() {
+  python3 - "$compose_dir/$deps_file" <<'EOF'
+from sys import argv
+deps_file = argv[1]
+lines = map(lambda l: l.rstrip(), list(open(deps_file)))
+
+
+def order_deps_first(lines):
+    tree = dict([line.split(':') for line in lines])
+    prev_svc = []
+    new_lines = []
+    for svc, deps in tree.items():
+        if svc not in prev_svc:
+            if deps:
+                for dep in deps.split(','):
+                    if dep not in prev_svc:
+                        prev_svc.append(dep)
+                        new_lines.append(':'.join([dep, tree[dep]]))
+            prev_svc.append(svc)
+            new_lines.append(':'.join([svc, deps]))
+    return new_lines
+
+
+while True:
+    ordered_lines = order_deps_first(lines)
+    if ordered_lines == lines:
+        break
+    else:
+        lines = ordered_lines
+for line in lines:
+    print(line)
+EOF
+}
+
+start() {
+  set -e
+  # shellcheck disable=SC2046
+  [ $(id -u) -eq 0 ]
+  if [ -n "$opts" ]; then
+    for i in $opts; do
+      [ -n "$verbose" ] && echo "Starting $tmpl_name@$i"
+      systemctl start --no-block "$tmpl_name@$i.service"
+    done
+  else
+    for i in $(_find_order | cut -d: -f1 | xargs -I @ systemd-escape "@"); do
+      [ -n "$verbose" ] && echo "Starting $tmpl_name@$i"
+      systemctl start --no-block "$tmpl_name@$i.service"
+    done
+  fi
+}
+
+stop() {
+  set -e
+  # shellcheck disable=SC2046
+  [ $(id -u) -eq 0 ]
+  if [ -n "$opts" ]; then
+    for i in $opts; do
+      [ -n "$verbose" ] && echo "Stopping $tmpl_name@$i"
+      systemctl stop --no-block "$tmpl_name@$i.service"
+    done
+  else
+    for i in $(_find_order | cut -d: -f1 | xargs -I @ systemd-escape "@" | tac); do
+      [ -n "$verbose" ] && echo "Stopping $tmpl_name@$i"
+      systemctl stop --no-block "$tmpl_name@$i.service"
+    done
+  fi
+}
+
+reload() {
+  set -e
+  # shellcheck disable=SC2046
+  [ $(id -u) -eq 0 ]
+  if [ -n "$opts" ]; then
+    for i in $opts; do
+      [ -n "$verbose" ] && echo "Reloading $tmpl_name@$i"
+      systemctl reload --no-block "$tmpl_name@$i.service"
+    done
+  else
+    for i in $(_find_order | cut -d: -f1 | xargs -I @ systemd-escape "@" | tac); do
+      [ -n "$verbose" ] && echo "Reloading $tmpl_name@$i"
+      systemctl reload --no-block "$tmpl_name@$i.service"
+    done
+  fi
+}
+
+status() {
+  if [ -n "$opts" ]; then
+    instances="$opts"
+  else
+    instances="$(_find_instances)"
+  fi
+  [ -n "$verbose" ] && lines=10 || lines=0
+  for i in $instances; do
+    systemctl status --no-pager "--lines=$lines" -o cat "$tmpl_name@$(systemd-escape "$i").service"
+    if [ -n "$verbose" ]; then
+      (cd "$compose_dir/$i" && $dc ps)
+    fi
+  done
+}
+
+verbose=0
+action=
+opts=
+while [ -n "$1" ]; do
+  arg="$1"; shift
+  if [ "$arg" == "-h" ] || [ "$arg" == "--help" ]; then
+    usage
+    exit 0
+  elif [ "$arg" == "-V" ] || [ "$arg" == "--version" ]; then
+    capp --version
+    exit 0
+  elif [ "$arg" == "-v" ] || [ "$arg" == "--verbose" ]; then
+    verbose=1
+  fi
+  if [ -z "$action" ]; then
+    action="$arg"
+  elif [ -z "$opts" ]; then
+    opts="$arg"
+  else
+    opts="$opts $arg"
+  fi
+done
+case "$action" in
+  update)
+    update
+    ;;
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  reload)
+    reload
+    ;;
+  restart)
+    stop
+    sleep 3
+    start
+    ;;
+  status)
+    status
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
