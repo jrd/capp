@@ -19,6 +19,7 @@ from os import (
 from pathlib import Path
 from pwd import getpwuid
 from re import (
+    PatternError,
     compile,
     match,
     search,
@@ -83,7 +84,7 @@ def die(msg, error_code=1):
 
 def check_python():
     MIN_MAJ_VER = 3
-    MIN_MIN_VER = 7
+    MIN_MIN_VER = 9
     if version_info.major < MIN_MAJ_VER or version_info.minor < MIN_MIN_VER:
         die("Python3 version %d.%d minimum required" % (MIN_MAJ_VER, MIN_MIN_VER))
 
@@ -606,7 +607,7 @@ class CApp:
             parser.read_file(chain(('[def]',), f))
         cfg = dict(parser['def'])
         cfg['min_dca_version'] = float(cfg.get('min_dca_version', '2'))
-        cfg['max_mem_size'] = self._to_bytes(cfg.get('max_mem_size', '10240M'))
+        cfg['max_mem_size'] = self._valid_unit(cfg.get('max_mem_size', '10G'))
         cfg['max_proc'] = int(cfg.get('max_proc', '1000'))
         cfg['default_hostname'] = cfg.get('default_hostname', getfqdn())
         return cfg
@@ -648,12 +649,12 @@ class CApp:
         except CalledProcessError as e:
             printflush(f"  Error: {e.stderr}")
 
-    def _to_bytes(self, value_unit):
+    def _valid_unit(self, value_unit):
         if not value_unit:
             return None
         for unit in Unit:
             if value_unit.endswith(unit.name):
-                return int(round(float(value_unit[:-1]) * unit))
+                return value_unit
         return None
 
     def _to_unit(self, value_bytes):
@@ -995,7 +996,7 @@ class CApp:
                 elif not search(r'^[0-9]+$', definition[key][:-1]):
                     raise ValueError(f"key {key}, defined for {name} should have a valid postive integer value, in x-resources section")
                 else:
-                    value = self._to_bytes(definition[key])
+                    value = self._valid_unit(definition[key])
                     if key == 'memory':
                         limits.memory[name] = value
                     elif key == 'memory_avg':
@@ -1530,6 +1531,14 @@ class CApp:
         self.trace_action('rights-add', vars(args))
         for right in new_rights:
             name, env_regex, app_regex = right.split(',') if ',' in right else (right, '', '')
+            try:
+                compile(env_regex)
+            except PatternError as e:
+                raise ValueError(f"regex `{env_regex}` is not valid for environment on right {name}") from e
+            try:
+                compile(app_regex)
+            except PatternError as e:
+                raise ValueError(f"regex `{app_regex}` is not valid for application on right {name}") from e
             if name in Right.names():
                 rights[name] = [env_regex or '.*', app_regex or '.*']
         self._update_user_rights(user, rights)
