@@ -1,4 +1,4 @@
-TMPL = install/capp-installer
+TMPL = scripts/capp-installer
 ARCHIVE = src.tar.xz
 INSTALLER = capp-installer
 SOURCES = \
@@ -33,7 +33,7 @@ help:
 # Create the installer
 installer: $(INSTALLER)
 $(INSTALLER): $(TMPL) $(ARCHIVE)
-	@CAPP_VER=$$(./project_version get); \
+	@CAPP_VER=$$(uv version --short); \
 	(sed -r "s/^CAPP_VER=.*/CAPP_VER=$$CAPP_VER/" $(TMPL); base64 $(ARCHIVE)) > $@
 	@chmod +x $@
 

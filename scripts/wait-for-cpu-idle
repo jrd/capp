@@ -1,5 +1,5 @@
 #!/usr/bin/env -S python3 -u
-from os import execvp, cpu_count, getloadavg
+from os import cpu_count, execvp, getloadavg
 from random import randint
 from sys import argv, exit, stderr
 from time import sleep
@@ -7,11 +7,15 @@ from time import sleep
 THRESHOLD = 0.6
 DELAY_SEC = 10
 MAX_DELAY_SEC = 60 * 5
-NB_PROC = cpu_count()
+NB_PROC = cpu_count() or 1
 
 
 def get_cpu_load() -> float:
-    return getloadavg()[0] / NB_PROC
+    try:
+        min1, _min5, _min15 = getloadavg()
+        return min1 / NB_PROC
+    except Exception:
+        return 0
 
 
 args = argv[1:]

@@ -1,42 +1,88 @@
 #!/bin/bash
 set -e
 CAPP_VER=to_replace
-def_min_dca_ver=2
-def_cont_mem='10G'
-def_cont_proc=1000
+min_dca_ver=2
+cont_mem='10G'
+cont_proc=1000
+nohttps=0
+dh="" # default hostname
+de="" # default email
 compose_dir=/etc/compose
 me=$(readlink -f "$0")
 offset=$(($(sed -rn '/#{10}/=' "$me") + 1))
 usage() {
-    echo "$0 default_hostname default_email [min_dca_ver=$def_min_dca_ver] [container_max_memory_size=$def_cont_mem] [container_max_process=$def_cont_proc] [nohttps]" >&2
-    echo "  container_max_memory_size should be expressed with M or G units" >&2
-    echo "-v|--version    show the version" >&2
-    echo "-h|--help       show this help message" >&2
-    echo "-e|--extract    extract the inner archive to src.tar.xz"
-    # shellcheck disable=SC2086
-    exit ${1:-1}
+  cat >&2 <<EOF
+$0 OPTIONS default_hostname default_email
+
+OPTIONS:
+--min-dca-ver=       minimun DCA version allowed [$min_dca_ver]
+--max-memory-size=   max memory per container [$cont_mem]
+                     specify it using units like M or G
+--max-process=       max processes per container [$cont_proc]
+--nohttps            disable https handling and redirect
+
+-v, --version        show version
+-h, --help           show this help message
+-e, --extract        extract the inner archive to
+                     'src.tar.xz' in current directory
+EOF
+  # shellcheck disable=SC2086
+  exit ${1:-1}
 }
-if [ "$1" = "-v" ] || [ "$1" = "--version" ]; then
-    echo "$CAPP_VER"
-    exit 0
-fi
-if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-    usage 0
-fi
-if [ "$1" = "-e" ] || [ "$1" = "--extract" ]; then
-    tail -n+$offset "$me" | base64 -d > src.tar.xz
-    exit 0
+while [ -n "$1" ]; do
+  if echo "$1" | grep -q "^-"; then
+    if [ "$1" = "-v" ] || [ "$1" = "--version" ]; then
+      echo "$CAPP_VER"
+      exit 0
+    elif [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+      usage 0
+    elif [ "$1" = "-e" ] || [ "$1" = "--extract" ]; then
+      tail -n+$offset "$me" | base64 -d > src.tar.xz
+      exit 0
+    elif echo "$1" | grep -qE "^--min-dca-ver="; then
+      min_dca_ver=$(echo "$1"|cut -d= -f2)
+      shift
+      echo "$min_dca_ver" | grep -qE '^[0-9](\.[0-9]+)?$' || usage
+    elif echo "$1" | grep -qE "^--max-memory-size="; then
+      cont_mem=$(echo "$1"|cut -d= -f2)
+      shift
+      echo "$cont_mem" | grep -E -q '^[0-9]+[MG]$' || usage
+    elif echo "$1" | grep -qE "^--max-process="; then
+      cont_proc=$(echo "$1"|cut -d= -f2)
+      shift
+      echo "$cont_proc" | grep -E -q '^[0-9]+$' || usage
+    elif [ "$1" = "--nohttps" ]; then
+      nohttps=1
+      shift
+    else
+      echo "Unrecognized option $1"
+      exit 1
+    fi
+  elif [ -z "$dh" ]; then
+    dh="$1"
+    shift
+  elif [ -z "$de" ]; then
+    de="$1"
+    shift
+  else
+    echo "Too many parameters"
+    exit 1
+  fi
+done
+if [ -z "$dh" ] || [ -z "$de" ]; then
+  echo "Parameters missing"
+  exit 1
 fi
 # shellcheck disable=SC2046
 if [ $(id -u) -ne 0 ]; then
-    echo "Root required" >&2
-    exit 1
+  echo "Root required" >&2
+  exit 1
 fi
 for bin in useradd usermod base64 curl docker sudo tar unxz; do
-    if ! which $bin >/dev/null 2>&1; then
-        echo "$bin required" >&2
-        exit 1
-    fi
+  if ! which $bin >/dev/null 2>&1; then
+    echo "$bin required" >&2
+    exit 1
+  fi
 done
 docker="$(which docker)"
 if "$docker" compose version | grep -q 'Docker Compose'; then
@@ -45,49 +91,18 @@ else
   echo "docker with compose required" >&2
   exit 1
 fi
-dh="$1"
-# shellcheck disable=SC2015
-[ -n "$dh" ] && shift || usage
-de="$1"
-# shellcheck disable=SC2015
-[ -n "$dh" ] && shift || usage
-min_dca_ver=
-cont_mem=
-cont_proc=
-nohttps=0
-while [ -n "$1" ]; do
-    p="$1"
-    shift
-    if [ -z "$min_dca_ver" ]; then
-        echo "$p" | grep -E -q '^[0-9](\.[0-9]+)?$' || usage
-        min_dca_ver="$p"
-    elif [ -z "$cont_mem" ]; then
-        echo "$p" | grep -E -q '^[0-9]+[MG]$' || usage
-        cont_mem="$p"
-    elif [ -z "$cont_proc" ]; then
-        echo "$p" | grep -E -q '^[0-9]+$' || usage
-        cont_proc="$p"
-    elif [ "$p" = "nohttps" ]; then
-        nohttps=1
-    else
-        usage
-    fi
-done
-[ -n "$min_dca_ver" ] || min_dca_ver=$def_min_dca_ver
-[ -n "$cont_mem" ] || cont_mem=$def_cont_mem
-[ -n "$cont_proc" ] || cont_proc=$def_cont_proc
 
 ### Create directories and extract sources ###
 mkdir -p \
-    /usr/local/bin \
-    /etc/capp/users \
-    /etc/capp/pubkeys \
-    /etc/capp/rights \
-    /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy} \
-    $compose_dir \
-    /home/deploy/dca \
-    /etc/ssh/sshd_config.d \
-    /etc/sudoers.d
+  /usr/local/bin \
+  /etc/capp/users \
+  /etc/capp/pubkeys \
+  /etc/capp/rights \
+  /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy} \
+  $compose_dir \
+  /home/deploy/dca \
+  /etc/ssh/sshd_config.d \
+  /etc/sudoers.d
 tmpdir=$(mktemp -d)
 cd "$tmpdir"
 tail -n+$offset "$me" | base64 -d | tar xJf -
@@ -101,9 +116,9 @@ default_hostname=${dh}
 compose_dir=${compose_dir}
 EOF
 sed \
-    -e "s|COMPOSE_DIR|$compose_dir|" \
-    -e "s|DOCKER|$docker|" \
-    confs/compose@.service > "/etc/systemd/system/compose@.service"
+  -e "s|COMPOSE_DIR|$compose_dir|" \
+  -e "s|DOCKER|$docker|" \
+  confs/compose@.service > "/etc/systemd/system/compose@.service"
 cp confs/compose.sudoers /etc/sudoers.d/compose
 cp confs/deploy.sudoers /etc/sudoers.d/deploy
 cp confs/sshd-deploy.conf /etc/ssh/sshd_config.d/deploy.conf
@@ -117,19 +132,27 @@ exec $dc "\$@"
 EOF
 chmod +x /usr/local/bin/dc
 for f in capp compose-systemd get_deploy_keys wait-for-cpu-idle; do
-    cp scripts/"$f" /usr/local/bin/
+  cp scripts/"$f" /usr/local/bin/
 done
 cp scripts/deploy-capp ~deploy/capp
 
 ### Initial Data ###
 cp -r proxy dca $compose_dir/
 if [ "$nohttps" -eq 1 ]; then
-    # comment the letsencrypt service
-    sed -ri '/le:/,/certs:rw/s/^/#/' $compose_dir/proxy/docker-compose.yml
-    # do not bind the 443 port on the host
-    sed -ri '/:443/d' $compose_dir/proxy/docker-compose.yml
-    # do not redirect http access to https
-    sed -ri '/Env\.HTTPS_METHOD/s/redirect/nohttps/' $compose_dir/proxy/gen/nginx.tmpl
+  cat > $compose_dir/proxy/docker-compose.override.yml <<EOF
+services:
+  nginx:
+    ports: !override
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+  gen:
+    environment:
+      - "HTTPS_METHOD=nohttps"
+  le:
+    profiles: ["https"]
+EOF
 fi
 sed -ri "s/dca:1000:1000/dca:$(id -u compose):$(id -g compose)/" $compose_dir/dca/docker-compose.yml
 DOCKER_GEN_VERSION=$($compose_dir/proxy/gen/docker-gen --version)
@@ -139,11 +162,11 @@ DEFAULT_EMAIL=$de
 DOCKER_GEN_VERSION=${DOCKER_GEN_VERSION}
 EOF
 if [ -f $compose_dir/compose.deps ]; then
-    for svc in proxy dca; do
-        grep -q "^$svc:" $compose_dir/compose.deps || echo "$svc:" >> $compose_dir/compose.deps
-    done
+  for svc in proxy dca; do
+    grep -q "^$svc:" $compose_dir/compose.deps || echo "$svc:" >> $compose_dir/compose.deps
+  done
 else
-    echo "proxy:\ndca:" > $compose_dir/compose.deps
+  printf "%s:\n%s:\n" proxy dca > $compose_dir/compose.deps
 fi
 
 ### Fix Rights ###
@@ -170,10 +193,10 @@ chmod u=r,g=r,o= /etc/sudoers.d/{compose,deploy}
 ### Build DCA/Proxy containers and run them ###
 set +e
 if ! docker volume inspect vhosts >/dev/null 2>&1; then
-    docker volume create vhosts
+  docker volume create vhosts
 fi
 if ! docker volume inspect certs >/dev/null 2>&1; then
-    docker volume create certs
+  docker volume create certs
 fi
 cd $compose_dir/dca
 $dc build --pull --no-cache

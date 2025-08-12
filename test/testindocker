@@ -1,0 +1,62 @@
+#!/bin/bash
+set -e
+cd $(dirname "$0")/..
+make installer
+(
+    cp capp-installer test/
+    cd test
+    DOCKER_BUILDKIT=1 docker build --network host -t capptest .
+    rm capp-installer
+    tar -czf myapp--prod.dca -C myapp .
+    sha256sum myapp--prod.dca > myapp--prod.dca.sha256
+)
+trap 'docker kill capptest; docker rmi -f capptest; rm test/myapp--prod.dca*' EXIT
+docker run \
+    --name capptest \
+    --rm \
+    --privileged \
+    -p 1022:22 \
+    -p 1122:122 \
+    -p 1080:80 \
+    -p 1443:443 \
+    -d \
+    capptest
+echo "Wait for systemd to start"
+sleep 1
+docker exec -t capptest bash -x /root/capp-installer test.capp mail@example.com "$@"
+docker exec -t capptest systemctl restart sshd
+capptest_ip=$(docker inspect capptest|sed -rn '/"IPAddress"/{s/.*: "(.+)",/\1/;p;q}')
+cat <<EOF
+Capp is running in a container.
+
+The server is configured to use 'test.capp' as main domain.
+
+Temporarily add this to you '/etc/hosts' file:
+    $capptest_ip test.capp myapp.test.capp
+
+You can directly reach the container with:
+    docker exec -ti capptest /bin/bash
+
+'tmux' is also available in the container so feel free to use it.
+
+Add your public key for authentication:
+    docker exec -ti -u compose capptest capp users add $USER "\$(cat ~/.ssh/id_rsa.pub)"
+
+The following ports are binded (local → container):
+    1022 → 22
+    1122 → 122
+    1080 → 80
+    1443 → 443
+
+You can ssh with:
+    ssh -p 1022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q deploy@localhost
+
+For instance to deploy the myapp example:
+    scp -P 1122 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+      test/myapp--prod.dca* dca@localhost:
+    ssh -p 1022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q deploy@localhost \\
+      deploy myapp--prod.dca
+
+Hit Ctrl-C to stop and exit
+EOF
+docker logs -f capptest

@@ -49,7 +49,7 @@ _find_loaded_instances() {
   systemctl list-units -q --plain --no-legend --state=loaded --type=service "$tmpl_name@*" | cut -d' ' -f1 | xargs -I @ systemd-escape -u --instance "@"
 }
 _find_instances() {
-  cut -d: -f1 "$compose_dir/$deps_file"
+  cut -d: -f1 "$compose_dir/$deps_file" | grep -v -E '^$|^#'
 }
 _find_instance_deps() {
   grep "^$1:" "$compose_dir/$deps_file" | cut -d: -f2 | tr ',' '\n' | sort
@@ -125,7 +125,7 @@ _find_order() {
   python3 - "$compose_dir/$deps_file" <<'EOF'
 from sys import argv
 deps_file = argv[1]
-lines = map(lambda l: l.rstrip(), list(open(deps_file)))
+lines = [l.rstrip() for l in list(open(deps_file)) if ':' in l and l[0] != '#']
 
 
 def order_deps_first(lines):

@@ -1,5 +1,6 @@
 include:
   - local: /.gitlab/build-ci.yml
+  - local: /.gitlab/linter-ci.yml
   - local: /.gitlab/security-ci.yml
   - local: /.gitlab/secret-ci.yml
   - local: /.gitlab/tag-ci.yml
@@ -10,6 +11,8 @@ stages:
   - publish
 build:
   extends: .build
+linter:
+  extends: .linter
 security:
   extends: .security
   needs:
@@ -20,6 +23,7 @@ secret:
   extends: .tag
   needs:
     - build
+    - linter
     - security
     - secret
 tag:major:

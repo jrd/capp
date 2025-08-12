@@ -1,0 +1,1 @@
+- scripts and configs moved

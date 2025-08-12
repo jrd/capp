@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 from os import environ, execvpe
+from pathlib import Path
 from shlex import split
 from sys import exit
 
-args = ['sudo', '-u', 'compose', '/usr/local/bin/capp'] + split(environ.pop('SSH_ORIGINAL_COMMAND', ''))
-if 'SHELL' not in environ:
-    try:
-        environ['SHELL'] = [l.strip() for l in open('/etc/passwd').readlines() if l.startswith(environ['USER'] + ':')][0].split(':')[6]
-    except Exception:
-        pass
-execvpe('sudo', args, environ)
-exit(1)
+if __name__ == '__main__':
+    args = ['sudo', '-u', 'compose', '/usr/local/bin/capp'] + split(environ.pop('SSH_ORIGINAL_COMMAND', ''))
+    if 'SHELL' not in environ:
+        try:
+            environ['SHELL'] = next(
+                line.strip() for line in Path('/etc/passwd').read_text(encoding='utf8').split('\n') if line.startswith(environ['USER'] + ':')
+            ).split(':')[6]
+        except Exception:
+            pass
+    execvpe('sudo', args, environ)
+    exit(1)
