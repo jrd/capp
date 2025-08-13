@@ -43,11 +43,11 @@ dev = [
 
 [project.urls]
 # https://github.com/pypi/warehouse/blob/main/warehouse/templates/packaging/detail.html#L20
-"Repository" = "https://gitlab.com/systra/qeto/infra/deploy"
-"Documentation" = "https://gitlab.com/systra/qeto/infra/deploy/-/blob/master/README.md"
-"Bug Tracker" = "https://gitlab.com/systra/qeto/infra/deploy/-/issues"
-"Merge Requests" = "https://gitlab.com/systra/qeto/infra/deploy/-/merge_requests"
-"Changelog" = "https://gitlab.com/systra/qeto/infra/deploy/-/blob/master/CHANGELOG.md"
+"Repository" = "https://gitlab.com/capp_grp/capp"
+"Documentation" = "https://gitlab.com/capp_grp/capp/-/blob/master/README.md"
+"Bug Tracker" = "https://gitlab.com/capp_grp/capp/-/issues"
+"Merge Requests" = "https://gitlab.com/capp_grp/capp/-/merge_requests"
+"Changelog" = "https://gitlab.com/capp_grp/capp/-/blob/master/CHANGELOG.md"
 
 [tool.uv]
 package = false
