@@ -1,0 +1,38 @@
+#!/usr/bin/env -S python3 -u
+from os import cpu_count, execvp, getloadavg
+from random import randint
+from sys import argv, exit, stderr
+from time import sleep
+
+THRESHOLD = 0.6
+DELAY_SEC = 10
+MAX_DELAY_SEC = 60 * 5
+NB_PROC = cpu_count() or 1
+
+
+def get_cpu_load() -> float:
+    try:
+        min1, _min5, _min15 = getloadavg()
+        return min1 / NB_PROC
+    except Exception:
+        return 0
+
+
+args = argv[1:]
+total_delay = 0
+pre_sleep = randint(DELAY_SEC // 2, 2 * DELAY_SEC)
+print(f"Waiting {pre_sleep} seconds")
+sleep(pre_sleep)
+total_delay += pre_sleep
+cpu_load = get_cpu_load()
+while total_delay < MAX_DELAY_SEC and cpu_load > THRESHOLD:
+    print(f"Average CPU load too high ({cpu_load} > {THRESHOLD})")
+    print(f"Delay ({DELAY_SEC}\") starting {args}")
+    sleep(DELAY_SEC)
+    total_delay += DELAY_SEC
+    cpu_load = get_cpu_load()
+if total_delay < MAX_DELAY_SEC:
+    execvp(args[0], args)
+else:
+    print(f"Max delay of {MAX_DELAY_SEC}\" exceeded, exit with error", file=stderr)
+    exit(1)

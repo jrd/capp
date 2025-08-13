@@ -1,0 +1,11 @@
+services:
+  web:
+    build:
+      context: web
+      args:
+        - MYAPP_VERSION=1.2.3
+    volumes:
+      - type: bind
+        source: ./www/index.html
+        target: /usr/share/nginx/html/index.html
+        read_only: true

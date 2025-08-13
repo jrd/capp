@@ -21,7 +21,6 @@
   script:
     - |
       set -e
-      [ -x ./project_version ]
       echo $VERSION_UPDATE update
       if ! echo "$VERSION_UPDATE" | grep -qE "^major|minor|patch$"; then echo "VERSION_UPDATE should be set to either major, minor or patch" >&2; exit 1; fi
       if [ ! -s "$DEPLOY_KEY_TO_TAG" ]; then
@@ -29,8 +28,13 @@
         exit 1
       fi
       (cat "$DEPLOY_KEY_TO_TAG" | tr -d "\r"; echo "") | ssh-add - >/dev/null
-      ./.gitlab/make_new_release $VERSION_UPDATE
-      VER=$(./project_version get)
-      git push origin refs/tags/v$VER
+      CURR_VER=$(uv version --short)
+      uv version --no-sync "$VERSION_UPDATE"
+      NEXT_VER=$(uv version --short)
+      echo "$CURR_VER -> $NEXT_VER"
+      uvx ezchlog merge $NEXT_VER
+      git commit -m "version $NEXT_VER"
+      git tag -a -f -m "version $NEXT_VER" "v$NEXT_VER"
+      git push origin refs/tags/v$NEXT_VER
       if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then git push -o ci.skip origin "HEAD:$CI_COMMIT_BRANCH"; fi
-      echo "v$VER tagged and pushed"
+      echo "v$NEXT_VER tagged and pushed"

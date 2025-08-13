@@ -5,21 +5,16 @@ charset = utf-8
 end_of_line = lf
 insert_final_newline = true
 indent_style = space
+indent_size = 2
+line_length = 160
+
+# python script files
+[{scripts/capp,scripts/deploy-capp,scripts/wait-for-cpu-idle}]
 indent_size = 4
-line_length = 200
-skip_gitignore = true
-multi_line_output = 3
-reverse_relative = true
-use_parentheses = true
-combine_star = true
-include_trailing_comma = true
-force_grid_wrap = 2
 
-[*.yml]
-indent_size = 2
-
-[project_version]
-indent_size = 2
+[Dockerfile]
+indent_size = 4
 
 [Makefile]
 indent_style = tab
+indent_size = 4

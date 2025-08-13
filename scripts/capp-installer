@@ -1,0 +1,210 @@
+#!/bin/bash
+set -e
+CAPP_VER=to_replace
+min_dca_ver=2
+cont_mem='10G'
+cont_proc=1000
+nohttps=0
+dh="" # default hostname
+de="" # default email
+compose_dir=/etc/compose
+me=$(readlink -f "$0")
+offset=$(($(sed -rn '/#{10}/=' "$me") + 1))
+usage() {
+  cat >&2 <<EOF
+$0 OPTIONS default_hostname default_email
+
+OPTIONS:
+--min-dca-ver=       minimun DCA version allowed [$min_dca_ver]
+--max-memory-size=   max memory per container [$cont_mem]
+                     specify it using units like M or G
+--max-process=       max processes per container [$cont_proc]
+--nohttps            disable https handling and redirect
+
+-v, --version        show version
+-h, --help           show this help message
+-e, --extract        extract the inner archive to
+                     'src.tar.xz' in current directory
+EOF
+  # shellcheck disable=SC2086
+  exit ${1:-1}
+}
+while [ -n "$1" ]; do
+  if echo "$1" | grep -q "^-"; then
+    if [ "$1" = "-v" ] || [ "$1" = "--version" ]; then
+      echo "$CAPP_VER"
+      exit 0
+    elif [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+      usage 0
+    elif [ "$1" = "-e" ] || [ "$1" = "--extract" ]; then
+      tail -n+$offset "$me" | base64 -d > src.tar.xz
+      exit 0
+    elif echo "$1" | grep -qE "^--min-dca-ver="; then
+      min_dca_ver=$(echo "$1"|cut -d= -f2)
+      shift
+      echo "$min_dca_ver" | grep -qE '^[0-9](\.[0-9]+)?$' || usage
+    elif echo "$1" | grep -qE "^--max-memory-size="; then
+      cont_mem=$(echo "$1"|cut -d= -f2)
+      shift
+      echo "$cont_mem" | grep -E -q '^[0-9]+[MG]$' || usage
+    elif echo "$1" | grep -qE "^--max-process="; then
+      cont_proc=$(echo "$1"|cut -d= -f2)
+      shift
+      echo "$cont_proc" | grep -E -q '^[0-9]+$' || usage
+    elif [ "$1" = "--nohttps" ]; then
+      nohttps=1
+      shift
+    else
+      echo "Unrecognized option $1"
+      exit 1
+    fi
+  elif [ -z "$dh" ]; then
+    dh="$1"
+    shift
+  elif [ -z "$de" ]; then
+    de="$1"
+    shift
+  else
+    echo "Too many parameters"
+    exit 1
+  fi
+done
+if [ -z "$dh" ] || [ -z "$de" ]; then
+  echo "Parameters missing"
+  exit 1
+fi
+# shellcheck disable=SC2046
+if [ $(id -u) -ne 0 ]; then
+  echo "Root required" >&2
+  exit 1
+fi
+for bin in useradd usermod base64 curl docker sudo tar unxz; do
+  if ! which $bin >/dev/null 2>&1; then
+    echo "$bin required" >&2
+    exit 1
+  fi
+done
+docker="$(which docker)"
+if "$docker" compose version | grep -q 'Docker Compose'; then
+  dc="$docker compose"
+else
+  echo "docker with compose required" >&2
+  exit 1
+fi
+
+### Create directories and extract sources ###
+mkdir -p \
+  /usr/local/bin \
+  /etc/capp/users \
+  /etc/capp/pubkeys \
+  /etc/capp/rights \
+  /etc/capp/hooks.d/{pre_deploy,post_deploy,pre_undeploy,post_undeploy} \
+  $compose_dir \
+  /home/deploy/dca \
+  /etc/ssh/sshd_config.d \
+  /etc/sudoers.d
+tmpdir=$(mktemp -d)
+cd "$tmpdir"
+tail -n+$offset "$me" | base64 -d | tar xJf -
+
+### Config files ###
+cat > /etc/capp.conf <<EOF
+min_dca_version=${min_dca_ver}
+max_mem_size=${cont_mem}
+max_proc=${cont_proc}
+default_hostname=${dh}
+compose_dir=${compose_dir}
+EOF
+sed \
+  -e "s|COMPOSE_DIR|$compose_dir|" \
+  -e "s|DOCKER|$docker|" \
+  confs/compose@.service > "/etc/systemd/system/compose@.service"
+cp confs/compose.sudoers /etc/sudoers.d/compose
+cp confs/deploy.sudoers /etc/sudoers.d/deploy
+cp confs/sshd-deploy.conf /etc/ssh/sshd_config.d/deploy.conf
+
+### Scripts and binaries ###
+id -u compose >/dev/null 2>&1 || useradd --home-dir $compose_dir --no-create-home --user-group --shell /usr/sbin/nologin -c "Compose" -l compose
+id -u deploy >/dev/null 2>&1 || useradd --no-create-home --user-group --password '*' -c "Deploy" deploy
+cat > /usr/local/bin/dc <<EOF
+#!/bin/sh
+exec $dc "\$@"
+EOF
+chmod +x /usr/local/bin/dc
+for f in capp compose-systemd get_deploy_keys wait-for-cpu-idle; do
+  cp scripts/"$f" /usr/local/bin/
+done
+cp scripts/deploy-capp ~deploy/capp
+
+### Initial Data ###
+cp -r proxy dca $compose_dir/
+if [ "$nohttps" -eq 1 ]; then
+  cat > $compose_dir/proxy/docker-compose.override.yml <<EOF
+services:
+  nginx:
+    ports: !override
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+  gen:
+    environment:
+      - "HTTPS_METHOD=nohttps"
+  le:
+    profiles: ["https"]
+EOF
+fi
+sed -ri "s/dca:1000:1000/dca:$(id -u compose):$(id -g compose)/" $compose_dir/dca/docker-compose.yml
+DOCKER_GEN_VERSION=$($compose_dir/proxy/gen/docker-gen --version)
+cat > $compose_dir/proxy/.env <<EOF
+DEFAULT_HOST=$dh
+DEFAULT_EMAIL=$de
+DOCKER_GEN_VERSION=${DOCKER_GEN_VERSION}
+EOF
+if [ -f $compose_dir/compose.deps ]; then
+  for svc in proxy dca; do
+    grep -q "^$svc:" $compose_dir/compose.deps || echo "$svc:" >> $compose_dir/compose.deps
+  done
+else
+  printf "%s:\n%s:\n" proxy dca > $compose_dir/compose.deps
+fi
+
+### Fix Rights ###
+chown :compose /etc/capp/users /etc/capp/pubkeys /etc/capp/rights
+chmod g+w,o=rX /etc/capp/users /etc/capp/pubkeys /etc/capp/rights
+chown :compose /usr/local/bin/capp
+chmod +x /usr/local/bin/{capp,compose-systemd,get_deploy_keys,wait-for-cpu-idle}
+chown -R compose: ~compose
+chmod u=rx,g=rx,o= ~deploy/capp
+chmod g+w ~deploy/dca
+chown -R deploy: ~deploy
+chown -R :compose ~deploy/dca
+[ -e $compose_dir/dca/users-keys ] && rm $compose_dir/dca/users-keys
+[ -e /etc/deploy-authorized-keys ] && rm /etc/deploy-authorized-keys
+[ -e /etc/dca-authorized-keys ] && rm /etc/dca-authorized-keys
+touch /var/log/capp.log
+chown compose: /var/log/capp.log
+chmod g+w /var/log/capp.log
+groups compose | grep -q '\<docker\>' || usermod -a -G docker compose
+groups compose | grep -q '\<systemd-journal\>' || usermod -a -G systemd-journal compose
+groups compose | grep -q '\<deploy\>' || usermod -a -G deploy compose
+chmod u=r,g=r,o= /etc/sudoers.d/{compose,deploy}
+
+### Build DCA/Proxy containers and run them ###
+set +e
+if ! docker volume inspect vhosts >/dev/null 2>&1; then
+  docker volume create vhosts
+fi
+if ! docker volume inspect certs >/dev/null 2>&1; then
+  docker volume create certs
+fi
+cd $compose_dir/dca
+$dc build --pull --no-cache
+cd $compose_dir/proxy
+$dc build --pull --no-cache
+rm -rf "$tmpdir"
+systemctl daemon-reload
+/usr/local/bin/compose-systemd update
+/usr/local/bin/compose-systemd start
+exit 0
+##########

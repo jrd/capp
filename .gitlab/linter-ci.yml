@@ -1,0 +1,15 @@
+.linter:
+  stage: test
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  image:
+    name: python:3.9
+    pull_policy: ["always", "if-not-present"]
+  before_script:
+    - |
+      set -xe
+      pip install --break-system-packages uv
+      uv venv --python $PYTHON_VERSION
+      uv sync --frozen
+  script:
+    - uv run poe lint

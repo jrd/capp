@@ -1,0 +1,4 @@
+target_env=prod
+version=2
+app=myapp
+web_base_vhost=myapp

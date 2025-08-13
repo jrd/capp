@@ -1,10 +1,16 @@
-TMPL = capp-installer-template
+TMPL = scripts/capp-installer
 ARCHIVE = src.tar.xz
-INSTALLER = $(patsubst %-template,%,$(TMPL))
+INSTALLER = capp-installer
 SOURCES = \
-  capp \
-  verify_dca.py \
-  get_deploy_keys
+  confs/compose.sudoers \
+  confs/compose@.service \
+  confs/deploy.sudoers \
+  confs/sshd-deploy.conf \
+  scripts/capp \
+  scripts/compose-systemd \
+  scripts/deploy-capp \
+  scripts/get_deploy_keys \
+  scripts/wait-for-cpu-idle
 DIRS = \
   proxy \
   dca
@@ -27,7 +33,7 @@ help:
 # Create the installer
 installer: $(INSTALLER)
 $(INSTALLER): $(TMPL) $(ARCHIVE)
-	@CAPP_VER=$$(sed -rn '/^__version__ =/{s/.*\((.+), (.+), (.+)\)/\1.\2.\3/;p}' capp); \
+	@CAPP_VER=$$(uv version --short); \
 	(sed -r "s/^CAPP_VER=.*/CAPP_VER=$$CAPP_VER/" $(TMPL); base64 $(ARCHIVE)) > $@
 	@chmod +x $@
 
@@ -44,6 +50,8 @@ proxy/gen/nginx.tmpl: proxy/gen/get-nginx-tmpl
 proxy/le/docker-gen: docker-gen/docker-gen
 	@cp $< $@
 
+# Make the install source archive
+archive: $(ARCHIVE)
 $(ARCHIVE): $(ALL_SOURCES)
 	@tar caf $@ $(DIRS) $(SOURCES)
 
@@ -56,4 +64,4 @@ clean:
 dist-clean: clean
 	@rm $(INSTALLER) 2>/dev/null || true
 
-.PHONY: help installer clean dist-clean
+.PHONY: help installer archive clean dist-clean

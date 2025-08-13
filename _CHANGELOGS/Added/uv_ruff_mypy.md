@@ -1,0 +1,1 @@
+- uv, ruff, mypy

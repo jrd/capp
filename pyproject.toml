@@ -1,0 +1,87 @@
+[project]
+name = "capp"
+version = "4.0.1"
+description = "Containerized application manager"
+authors = [
+  { name = "Cyrille Pontvieux", email = "cyrille@enialis.net" },
+]
+license = { text = "MIT License" }
+readme = "README.md"
+keywords = ["container", "docker", "docker-compose", "deployment", "scripts", "systemd", "systemd-service", "app-manager"]
+# https://pypi.org/classifiers/
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Natural Language :: English",
+  "Operating System :: POSIX :: Linux",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Unix Shell",
+  "Topic :: System :: Systems Administration",
+  "Topic :: Utilities",
+  "Typing :: Typed",
+]
+requires-python = ">=3.9"
+dependencies = [
+  "pyyaml",
+]
+
+[dependency-groups]
+dev = [
+  "poethepoet",
+  "ruff",
+  "mypy",
+  "types-pyyaml",
+]
+
+[project.urls]
+# https://github.com/pypi/warehouse/blob/main/warehouse/templates/packaging/detail.html#L20
+"Repository" = "https://gitlab.com/systra/qeto/infra/deploy"
+"Documentation" = "https://gitlab.com/systra/qeto/infra/deploy/-/blob/master/README.md"
+"Bug Tracker" = "https://gitlab.com/systra/qeto/infra/deploy/-/issues"
+"Merge Requests" = "https://gitlab.com/systra/qeto/infra/deploy/-/merge_requests"
+"Changelog" = "https://gitlab.com/systra/qeto/infra/deploy/-/blob/master/CHANGELOG.md"
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 160
+include = ["scripts/capp", "scripts/deploy-capp", "scripts/wait-for-cpu-idle"]
+[tool.ruff.format]
+quote-style = "preserve"
+[tool.ruff.lint]
+# https://docs.astral.sh/ruff/rules
+select = [
+  "E", # pycodestyle, pep8
+  "F", # flake8
+  "W", # pycodestyle warnings
+  "I", # import sort
+  "B", # bugbear, avoid non-sense statements
+  "UP", # modern python (upgradable style)
+  "DTZ", # datetime timezone
+  "PTH", # prefer pathlib
+  "LOG", # logging
+  "T100", # debugger
+  "T203", # pprint
+  "FIX", # lines with TODO, FIXME, XXX and HACK
+]
+[tool.mypy]
+python_version = '3.9'
+exclude_gitignore = true
+files = ["scripts/capp", "scripts/deploy-capp", "scripts/wait-for-cpu-idle"]
+scripts_are_modules = true
+
+[tool.poe.tasks]
+lint_code = { cmd = "ruff check --fix", help = "Lint code" }
+lint_type = { cmd = "mypy", help = "Type check code" }
+lint = ["lint_code", "lint_type"]
+test = { cmd = "./test/testindocker", help = "Run capp in docker to test" }
+
