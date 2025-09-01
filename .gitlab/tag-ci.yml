@@ -4,10 +4,11 @@
   rules:
     - if: $CI_COMMIT_BRANCH
   image:
-    name: bitnami/git:latest
+    name: python:3.9-alpine
     pull_policy: ["always", "if-not-present"]
   before_script:
     - |
+      apk add git openssh uv
       mkdir -p ~/.ssh && chmod 700 ~/.ssh
       echo "StrictHostKeyChecking no" > ~/.ssh/config
       eval $(ssh-agent -s)
